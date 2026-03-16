@@ -3,6 +3,7 @@ package http
 import (
 	"net/http"
 	"strings"
+	"sync"
 )
 
 // Param represents a URL parameter (e.g., :id).
@@ -25,39 +26,133 @@ func (ps Params) Get(name string) string {
 }
 
 // HandlerFunc is a custom handler that includes URL parameters.
+// LƯU Ý QUAN TRỌNG: Để đạt được "Zero Allocation", biến `params` được lấy từ sync.Pool.
+// Vòng đời của `params` chỉ hợp lệ trong lúc function này chạy.
+// TUYỆT ĐỐI KHÔNG truyền `params` sang một Goroutine khác. Nếu cần, hãy copy nó.
 type HandlerFunc func(w http.ResponseWriter, r *http.Request, params Params)
 
-// node represents a Radix Tree (Trie) node.
-// We use a segment-based approach (splitting by '/') which is highly efficient
-// and easy to implement for HTTP routing with parameters.
+// node represents a Radix Tree (Trie) node optimized for zero allocations.
 type node struct {
-	part     string // e.g. "users", ":id", "*filepath"
-	path     string // full path if it's a leaf node
+	part     string
+	paramKey string // Lưu sẵn key cho :param và *catchall để tránh cắt chuỗi lúc runtime
 	children []*node
-	isWild   bool // true if it's a param (:id) or catch-all (*filepath)
+	isWild   bool // true nếu là param (:id) hoặc catch-all (*filepath)
+	isParam  bool // true nếu là param (:id)
+	isCatch  bool // true nếu là catch-all (*filepath)
 	handler  HandlerFunc
 }
 
-// Router is an HTTP routing multiplexer using a Radix tree over path segments.
+func (n *node) insert(path string, parts []string, height int, handler HandlerFunc) {
+	if len(parts) == height {
+		n.handler = handler
+		return
+	}
+
+	part := parts[height]
+	var child *node
+	for _, c := range n.children {
+		if c.part == part {
+			child = c
+			break
+		}
+	}
+
+	if child == nil {
+		child = &node{
+			part:    part,
+			isWild:  part[0] == ':' || part[0] == '*',
+			isParam: part[0] == ':',
+			isCatch: part[0] == '*',
+		}
+		if child.isParam || child.isCatch {
+			child.paramKey = part[1:] // Cắt sẵn tên param lúc khởi tạo Router
+		}
+		n.children = append(n.children, child)
+	}
+	child.insert(path, parts, height+1, handler)
+}
+
+// search duyệt Tree hoàn toàn không cấp phát RAM (Zero Allocation)
+func (n *node) search(path string, params *Params) HandlerFunc {
+	// Bỏ qua các dấu "/" ở đầu
+	for len(path) > 0 && path[0] == '/' {
+		path = path[1:]
+	}
+
+	if len(path) == 0 {
+		return n.handler
+	}
+
+	var p, nextPath string
+	idx := strings.IndexByte(path, '/')
+	if idx == -1 {
+		p = path
+		nextPath = ""
+	} else {
+		p = path[:idx]
+		nextPath = path[idx:] // nextPath bắt đầu bằng "/", sẽ được xoá ở vòng lặp sau
+	}
+
+	// 1. Ưu tiên Exact match (Khớp chính xác)
+	for _, child := range n.children {
+		if child.part == p && !child.isWild {
+			if h := child.search(nextPath, params); h != nil {
+				return h
+			}
+			break
+		}
+	}
+
+	// 2. Wildcard match (Tham số hoặc Catch-all)
+	for _, child := range n.children {
+		if child.isParam {
+			origLen := len(*params)
+			*params = append(*params, Param{Key: child.paramKey, Value: p})
+			if h := child.search(nextPath, params); h != nil {
+				return h
+			}
+			// Backtrack lại nếu nhánh này không tìm thấy đích
+			*params = (*params)[:origLen]
+		} else if child.isCatch {
+			// Trả về toàn bộ phần còn lại (không bao gồm "/" ở đầu do đã xử lý bên trên)
+			*params = append(*params, Param{Key: child.paramKey, Value: path})
+			if child.handler != nil {
+				return child.handler
+			}
+		}
+	}
+
+	return nil
+}
+
+// Router is an HTTP routing multiplexer optimized for high concurrency and low RAM usage.
 type Router struct {
-	roots map[string]*node
+	roots      map[string]*node
+	paramsPool sync.Pool
 }
 
 // NewRouter creates a new Router.
 func NewRouter() *Router {
 	return &Router{
 		roots: make(map[string]*node),
+		paramsPool: sync.Pool{
+			New: func() any {
+				// Cấp phát sẵn Array với capacity = 20, giúp append không bị sinh thêm Array trên Heap
+				p := make(Params, 0, 20)
+				return &p
+			},
+		},
 	}
 }
 
 // splitPath splits the path by '/' and ignores empty segments.
+// Hàm này chỉ chạy lúc khởi tạo (Handle), nên Allocation ở đây là hoàn toàn OK.
 func splitPath(path string) []string {
 	segments := strings.Split(path, "/")
 	parts := make([]string, 0, len(segments))
 	for _, segment := range segments {
 		if segment != "" {
 			parts = append(parts, segment)
-			// Stop splitting if it's a catch-all wildcard
 			if segment[0] == '*' {
 				break
 			}
@@ -85,90 +180,26 @@ func (r *Router) POST(path string, handler HandlerFunc) {
 	r.Handle(http.MethodPost, path, handler)
 }
 
-func (n *node) insert(path string, parts []string, height int, handler HandlerFunc) {
-	if len(parts) == height {
-		n.path = path
-		n.handler = handler
+// ServeHTTP makes the Router implement the http.Handler interface.
+func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	root, ok := r.roots[req.Method]
+	if !ok {
+		http.NotFound(w, req)
 		return
 	}
 
-	part := parts[height]
-	var child *node
-	for _, c := range n.children {
-		if c.part == part {
-			child = c
-			break
-		}
-	}
+	// Mượn Params slice từ sync.Pool
+	p := r.paramsPool.Get().(*Params)
+	*p = (*p)[:0] // Reset chiều dài về 0 nhưng giữ nguyên memory capacity
 
-	if child == nil {
-		child = &node{
-			part:   part,
-			isWild: part[0] == ':' || part[0] == '*',
-		}
-		n.children = append(n.children, child)
-	}
-	child.insert(path, parts, height+1, handler)
-}
-
-func (n *node) search(parts []string, height int) *node {
-	if len(parts) == height || strings.HasPrefix(n.part, "*") {
-		if n.handler == nil {
-			return nil
-		}
-		return n
-	}
-
-	part := parts[height]
-	for _, child := range n.children {
-		if child.part == part || child.isWild {
-			result := child.search(parts, height+1)
-			if result != nil {
-				return result
-			}
-		}
-	}
-	return nil
-}
-
-// Search returns the matched handler and extracted URL parameters.
-func (r *Router) Search(method string, path string) (HandlerFunc, Params) {
-	root, ok := r.roots[method]
-	if !ok {
-		return nil, nil
-	}
-
-	searchParts := splitPath(path)
-	n := root.search(searchParts, 0)
-	if n != nil {
-		parts := splitPath(n.path)
-		var params Params
-		for i, part := range parts {
-			if part[0] == ':' {
-				params = append(params, Param{
-					Key:   part[1:],
-					Value: searchParts[i],
-				})
-			}
-			if part[0] == '*' && len(part) > 1 {
-				params = append(params, Param{
-					Key:   part[1:],
-					Value: strings.Join(searchParts[i:], "/"),
-				})
-				break
-			}
-		}
-		return n.handler, params
-	}
-	return nil, nil
-}
-
-// ServeHTTP makes the Router implement the http.Handler interface.
-func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	handler, params := r.Search(req.Method, req.URL.Path)
+	// Duyệt Radix Tree để tìm kết quả
+	handler := root.search(req.URL.Path, p)
 	if handler != nil {
-		handler(w, req, params)
-	} else {
-		http.NotFound(w, req)
+		handler(w, req, *p)
+		r.paramsPool.Put(p) // Xong việc thì trả lại vào Pool
+		return
 	}
+
+	r.paramsPool.Put(p)
+	http.NotFound(w, req)
 }
