@@ -29,17 +29,18 @@ func (ps Params) Get(name string) string {
 // LƯU Ý QUAN TRỌNG: Để đạt được "Zero Allocation", biến `params` được lấy từ sync.Pool.
 // Vòng đời của `params` chỉ hợp lệ trong lúc function này chạy.
 // TUYỆT ĐỐI KHÔNG truyền `params` sang một Goroutine khác. Nếu cần, hãy copy nó.
-type HandlerFunc func(w http.ResponseWriter, r *http.Request, params Params)
+type HandlerFunc func(ctx *Ctx) error
 
 // node represents a Radix Tree (Trie) node optimized for zero allocations.
 type node struct {
-	part     string
-	paramKey string // Lưu sẵn key cho :param và *catchall để tránh cắt chuỗi lúc runtime
-	children []*node
-	isWild   bool // true nếu là param (:id) hoặc catch-all (*filepath)
-	isParam  bool // true nếu là param (:id)
-	isCatch  bool // true nếu là catch-all (*filepath)
-	handler  HandlerFunc
+	part        string
+	paramKey    string // Lưu sẵn key cho :param và *catchall để tránh cắt chuỗi lúc runtime
+	children    []*node
+	isWild      bool // true nếu là param (:id) hoặc catch-all (*filepath)
+	isParam     bool // true nếu là param (:id)
+	isCatch     bool // true nếu là catch-all (*filepath)
+	handler     HandlerFunc
+	middlewares []MiddlewareFunc
 }
 
 func (n *node) insert(path string, parts []string, height int, handler HandlerFunc) {
@@ -65,7 +66,7 @@ func (n *node) insert(path string, parts []string, height int, handler HandlerFu
 			isCatch: part[0] == '*',
 		}
 		if child.isParam || child.isCatch {
-			child.paramKey = part[1:] // Cắt sẵn tên param lúc khởi tạo Router
+			child.paramKey = part[1:]
 		}
 		n.children = append(n.children, child)
 	}
@@ -137,7 +138,6 @@ func NewRouter() *Router {
 		roots: make(map[string]*node),
 		paramsPool: sync.Pool{
 			New: func() any {
-				// Cấp phát sẵn Array với capacity = 20, giúp append không bị sinh thêm Array trên Heap
 				p := make(Params, 0, 20)
 				return &p
 			},
@@ -195,8 +195,12 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	// Duyệt Radix Tree để tìm kết quả
 	handler := root.search(req.URL.Path, p)
 	if handler != nil {
-		handler(w, req, *p)
-		r.paramsPool.Put(p) // Xong việc thì trả lại vào Pool
+		ctx := NewCtx(w, req, *p...)
+		err := handler(ctx)
+		if err != nil {
+			_ = ctx.Text(http.StatusInternalServerError, err.Error())
+		}
+		r.paramsPool.Put(p)
 		return
 	}
 
