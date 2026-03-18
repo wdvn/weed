@@ -26,21 +26,20 @@ func (ps Params) Get(name string) string {
 }
 
 // HandlerFunc is a custom handler that includes URL parameters.
-// LƯU Ý QUAN TRỌNG: Để đạt được "Zero Allocation", biến `params` được lấy từ sync.Pool.
-// Vòng đời của `params` chỉ hợp lệ trong lúc function này chạy.
-// TUYỆT ĐỐI KHÔNG truyền `params` sang một Goroutine khác. Nếu cần, hãy copy nó.
+// LƯU Ý QUAN TRỌNG: Để đạt được "Zero Allocation", biến `ctx` được lấy từ sync.Pool.
+// Vòng đời của `ctx` chỉ hợp lệ trong lúc function này chạy.
+// TUYỆT ĐỐI KHÔNG truyền `ctx` sang một Goroutine khác. Nếu cần, hãy copy nó.
 type HandlerFunc func(ctx *Ctx) error
 
 // node represents a Radix Tree (Trie) node optimized for zero allocations.
 type node struct {
-	part        string
-	paramKey    string // Lưu sẵn key cho :param và *catchall để tránh cắt chuỗi lúc runtime
-	children    []*node
-	isWild      bool // true nếu là param (:id) hoặc catch-all (*filepath)
-	isParam     bool // true nếu là param (:id)
-	isCatch     bool // true nếu là catch-all (*filepath)
-	handler     HandlerFunc
-	middlewares []MiddlewareFunc
+	part     string
+	paramKey string // Lưu sẵn key cho :param và *catchall để tránh cắt chuỗi lúc runtime
+	children []*node
+	isWild   bool // true nếu là param (:id) hoặc catch-all (*filepath)
+	isParam  bool // true nếu là param (:id)
+	isCatch  bool // true nếu là catch-all (*filepath)
+	handler  HandlerFunc
 }
 
 func (n *node) insert(path string, parts []string, height int, handler HandlerFunc) {
@@ -66,7 +65,7 @@ func (n *node) insert(path string, parts []string, height int, handler HandlerFu
 			isCatch: part[0] == '*',
 		}
 		if child.isParam || child.isCatch {
-			child.paramKey = part[1:]
+			child.paramKey = part[1:] // Cắt sẵn tên param lúc khởi tạo Router
 		}
 		n.children = append(n.children, child)
 	}
@@ -128,18 +127,20 @@ func (n *node) search(path string, params *Params) HandlerFunc {
 
 // Router is an HTTP routing multiplexer optimized for high concurrency and low RAM usage.
 type Router struct {
-	roots      map[string]*node
-	paramsPool sync.Pool
+	roots   map[string]*node
+	ctxPool sync.Pool
 }
 
 // NewRouter creates a new Router.
 func NewRouter() *Router {
 	return &Router{
 		roots: make(map[string]*node),
-		paramsPool: sync.Pool{
+		ctxPool: sync.Pool{
 			New: func() any {
-				p := make(Params, 0, 20)
-				return &p
+				// Khởi tạo sẵn Ctx với slice params có capacity 20 để zero alloc
+				return &Ctx{
+					params: make(Params, 0, 20),
+				}
 			},
 		},
 	}
@@ -180,14 +181,14 @@ func (r *Router) POST(path string, handler HandlerFunc) {
 	r.Handle(http.MethodPost, path, handler)
 }
 
-// PUT is a shortcut for Handle(http.MethodPost, path, handler)
+// PUT is a shortcut for Handle(http.MethodPut, path, handler)
 func (r *Router) PUT(path string, handler HandlerFunc) {
-	r.Handle(http.MethodPost, path, handler)
+	r.Handle(http.MethodPut, path, handler)
 }
 
-// DELETE is a shortcut for Handle(http.MethodPost, path, handler)
+// DELETE is a shortcut for Handle(http.MethodDelete, path, handler)
 func (r *Router) DELETE(path string, handler HandlerFunc) {
-	r.Handle(http.MethodPost, path, handler)
+	r.Handle(http.MethodDelete, path, handler)
 }
 
 // ServeHTTP makes the Router implement the http.Handler interface.
@@ -198,22 +199,29 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// Mượn Params slice từ sync.Pool
-	p := r.paramsPool.Get().(*Params)
-	*p = (*p)[:0] // Reset chiều dài về 0 nhưng giữ nguyên memory capacity
+	// Mượn Ctx từ sync.Pool thay vì chỉ mượn Params
+	ctx := r.ctxPool.Get().(*Ctx)
+	ctx.r = req
+	ctx.w = w
+	ctx.cx = req.Context()
+	ctx.params = ctx.params[:0] // Reset chiều dài về 0 nhưng giữ nguyên memory capacity
 
-	// Duyệt Radix Tree để tìm kết quả
-	handler := root.search(req.URL.Path, p)
+	// Duyệt Radix Tree để tìm kết quả, truyền pointer params vào search
+	handler := root.search(req.URL.Path, &ctx.params)
 	if handler != nil {
-		ctx := NewCtx(w, req, *p...)
-		err := handler(ctx)
-		if err != nil {
-			_ = ctx.Text(http.StatusInternalServerError, err.Error())
-		}
-		r.paramsPool.Put(p)
+		_ = handler(ctx) // Bỏ qua error ở handler theo prototype (bạn có thể tuỳ chỉnh sau)
+
+		// Reset các pointer để tránh memory leak nếu giữ lại request/writer cũ
+		ctx.r = nil
+		ctx.w = nil
+		ctx.cx = nil
+		r.ctxPool.Put(ctx) // Xong việc thì trả Ctx lại vào Pool
 		return
 	}
 
-	r.paramsPool.Put(p)
+	ctx.r = nil
+	ctx.w = nil
+	ctx.cx = nil
+	r.ctxPool.Put(ctx)
 	http.NotFound(w, req)
 }
