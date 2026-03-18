@@ -180,6 +180,16 @@ func (r *Router) POST(path string, handler HandlerFunc) {
 	r.Handle(http.MethodPost, path, handler)
 }
 
+// PUT is a shortcut for Handle(http.MethodPost, path, handler)
+func (r *Router) PUT(path string, handler HandlerFunc) {
+	r.Handle(http.MethodPost, path, handler)
+}
+
+// DELETE is a shortcut for Handle(http.MethodPost, path, handler)
+func (r *Router) DELETE(path string, handler HandlerFunc) {
+	r.Handle(http.MethodPost, path, handler)
+}
+
 // ServeHTTP makes the Router implement the http.Handler interface.
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	root, ok := r.roots[req.Method]

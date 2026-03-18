@@ -38,6 +38,9 @@ func (c *Ctx) Next() {
 func (c *Ctx) Param(key string) string {
 	return c.params.Get(key)
 }
+func (c *Ctx) Params() []Param {
+	return c.params
+}
 
 func (c *Ctx) Body() ([]byte, error) {
 	return io.ReadAll(c.r.Body)
