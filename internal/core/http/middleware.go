@@ -1,3 +1,3 @@
 package http
 
-type MiddlewareFunc func(ctx *Ctx) error
+type MiddlewareFunc func(HandlerFunc) HandlerFunc

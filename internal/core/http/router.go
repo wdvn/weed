@@ -2,7 +2,6 @@ package http
 
 import (
 	"net/http"
-	"slices"
 	"strings"
 	"sync"
 )
@@ -32,16 +31,22 @@ func (ps Params) Get(name string) string {
 // DO NOT pass `ctx` to another Goroutine. If needed, please copy it.
 type HandlerFunc func(ctx *Ctx) error
 
+func wrapHandler(handler HandlerFunc, middlewares []MiddlewareFunc) HandlerFunc {
+	for i := len(middlewares) - 1; i >= 0; i-- {
+		handler = middlewares[i](handler)
+	}
+	return handler
+}
+
 // node represents a Radix Tree (Trie) node optimized for zero allocations.
 type node struct {
-	part        string
-	paramKey    string // Pre-computed key for :param and *catchall to avoid string slicing at runtime
-	children    []*node
-	isWild      bool // true if it is a param (:id) or catch-all (*filepath)
-	isParam     bool // true if it is a param (:id)
-	isCatch     bool // true if it is a catch-all (*filepath)
-	handler     HandlerFunc
-	middlewares []MiddlewareFunc
+	part     string
+	paramKey string // Pre-computed key for :param and *catchall to avoid string slicing at runtime
+	children []*node
+	isWild   bool // true if it is a param (:id) or catch-all (*filepath)
+	isParam  bool // true if it is a param (:id)
+	isCatch  bool // true if it is a catch-all (*filepath)
+	handler  HandlerFunc
 }
 
 func (n *node) insert(path string, parts []string, height int, handler HandlerFunc) {
@@ -61,11 +66,10 @@ func (n *node) insert(path string, parts []string, height int, handler HandlerFu
 
 	if child == nil {
 		child = &node{
-			part:        part,
-			isWild:      part[0] == ':' || part[0] == '*',
-			isParam:     part[0] == ':',
-			isCatch:     part[0] == '*',
-			middlewares: slices.Clone(n.middlewares),
+			part:    part,
+			isWild:  part[0] == ':' || part[0] == '*',
+			isParam: part[0] == ':',
+			isCatch: part[0] == '*',
 		}
 		if child.isParam || child.isCatch {
 			child.paramKey = part[1:] // Pre-slice param name during Router initialization
@@ -76,14 +80,14 @@ func (n *node) insert(path string, parts []string, height int, handler HandlerFu
 }
 
 // search traverses the Tree with zero RAM allocation (Zero Allocation)
-func (n *node) search(path string, params *Params) HandlerFunc {
+func (n *node) search(path string, params *Params) *node {
 	// Skip leading "/" characters
 	for len(path) > 0 && path[0] == '/' {
 		path = path[1:]
 	}
 
 	if len(path) == 0 {
-		return n.handler
+		return n
 	}
 
 	var p, nextPath string
@@ -124,16 +128,12 @@ func (n *node) search(path string, params *Params) HandlerFunc {
 			*params = (*params)[:origLen+1]
 			(*params)[origLen] = Param{Key: child.paramKey, Value: path}
 			if child.handler != nil {
-				return child.handler
+				return child
 			}
 		}
 	}
 
 	return nil
-}
-
-func (n *node) use(middle MiddlewareFunc) {
-	n.middlewares = append(n.middlewares, middle)
 }
 
 // Router is an HTTP routing multiplexer optimized for high concurrency and low RAM usage.
@@ -178,12 +178,55 @@ func splitPath(path string) []string {
 func (r *Router) Handle(method string, path string, handler HandlerFunc) {
 	parts := splitPath(path)
 	if _, ok := r.roots[method]; !ok {
-		r.roots[method] = &node{
-			middlewares: r.middlewares,
-		}
+		r.roots[method] = &node{}
 	}
-	r.roots[method].insert(path, parts, 0, handler)
+	// Wrap the handler with all registered global middlewares
+	wrappedHandler := wrapHandler(handler, r.middlewares)
+	r.roots[method].insert(path, parts, 0, wrappedHandler)
 }
+
+// ServeHTTP makes the Router implement the http.Handler interface.
+func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	root, ok := r.roots[req.Method]
+	if !ok {
+		http.NotFound(w, req)
+		return
+	}
+
+	// Borrow Ctx from sync.Pool instead of just Params
+	ctx := r.ctxPool.Get().(*Ctx)
+	ctx.r = req
+	ctx.w = w
+	ctx.cx = req.Context()
+	ctx.params = ctx.params[:0] // Reset length to 0 but keep memory capacity
+	// Traverse Radix Tree to find the result, pass params pointer to search
+	n := root.search(req.URL.Path, &ctx.params)
+	if n != nil && n.handler != nil {
+		err := n.handler(ctx) // Ignore error in handler based on prototype (can be customized later)
+		if err != nil {
+			_ = ctx.Text(500, "Internal Server Error")
+		}
+		// Reset pointers to avoid memory leak if old request/writer are retained
+		ctx.r = nil
+		ctx.w = nil
+		ctx.cx = nil
+		r.ctxPool.Put(ctx) // Return Ctx to Pool after finishing
+		return
+	}
+
+	ctx.r = nil
+	ctx.w = nil
+	ctx.cx = nil
+	r.ctxPool.Put(ctx)
+	http.NotFound(w, req)
+}
+
+func (r *Router) Use(middle ...MiddlewareFunc) {
+	// Append middlewares so any future routes registered will be wrapped with them
+	r.middlewares = append(r.middlewares, middle...)
+}
+
+//--------------METHOD----------------
 
 // GET is a shortcut for Handle(http.MethodGet, path, handler)
 func (r *Router) GET(path string, handler HandlerFunc) {
@@ -205,42 +248,6 @@ func (r *Router) DELETE(path string, handler HandlerFunc) {
 	r.Handle(http.MethodDelete, path, handler)
 }
 
-// ServeHTTP makes the Router implement the http.Handler interface.
-func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	root, ok := r.roots[req.Method]
-	if !ok {
-		http.NotFound(w, req)
-		return
-	}
-
-	// Borrow Ctx from sync.Pool instead of just Params
-	ctx := r.ctxPool.Get().(*Ctx)
-	ctx.r = req
-	ctx.w = w
-	ctx.cx = req.Context()
-	ctx.params = ctx.params[:0] // Reset length to 0 but keep memory capacity
-	// Traverse Radix Tree to find the result, pass params pointer to search
-	handler := root.search(req.URL.Path, &ctx.params)
-	if handler != nil {
-		err := handler(ctx) // Ignore error in handler based on prototype (can be customized later)
-		if err != nil {
-			_ = ctx.Text(500, "Internal Server Error")
-		}
-		// Reset pointers to avoid memory leak if old request/writer are retained
-		ctx.r = nil
-		ctx.w = nil
-		ctx.cx = nil
-		r.ctxPool.Put(ctx) // Return Ctx to Pool after finishing
-		return
-	}
-
-	ctx.r = nil
-	ctx.w = nil
-	ctx.cx = nil
-	r.ctxPool.Put(ctx)
-	http.NotFound(w, req)
-}
-
 func (r *Router) Static(prefix string, root string) {
 	// Remove trailing slash for normalization
 	prefix = strings.TrimSuffix(prefix, "/")
@@ -255,10 +262,4 @@ func (r *Router) Static(prefix string, root string) {
 		fileServer.ServeHTTP(ctx.w, ctx.r)
 		return nil
 	})
-}
-
-func (r *Router) Use(middle MiddlewareFunc) {
-	for _, node := range r.roots {
-		node.use(middle)
-	}
 }

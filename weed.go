@@ -12,15 +12,15 @@ type App struct {
 }
 
 func New() *App {
+	r := http.NewRouter()
 	return &App{
-		router: http.NewRouter(),
-		sv:     std.Server{},
+		router: r,
+		sv:     std.Server{Handler: r},
 	}
 }
 
 func (app *App) Serve(port string) error {
 	app.sv.Addr = fmt.Sprintf("%s", port)
-	app.sv.Handler = app.router
 	return app.sv.ListenAndServe()
 }
 

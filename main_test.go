@@ -1,12 +1,20 @@
 package weed
 
 import (
+	"fmt"
 	"github.com/wdvn/weed/internal/core/http"
 	"testing"
+	"time"
 )
 
 func TestApp_Serve(t *testing.T) {
 	app := New()
+	app.Use(func(next http.HandlerFunc) http.HandlerFunc {
+		return func(ctx *http.Ctx) error {
+			fmt.Printf("%v %s %s\n", time.Now(), ctx.Request().Method, ctx.Request().URL.Path)
+			return next(ctx)
+		}
+	})
 	app.router.GET("/", func(ctx *http.Ctx) error {
 		return ctx.Text(200, "ahihi")
 	})
