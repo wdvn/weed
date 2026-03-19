@@ -163,7 +163,29 @@ func BenchmarkRouter_ServeHTTP_ZeroAllocation(b *testing.B) {
 		_ = c.Param("id")
 		_ = c.Param("post_id")
 		_ = c.Param("filepath")
-		return c.Text(200, "")
+		return c.Text(200, "") // Gây ra 1 allocation do w.Header().Set()
+	})
+
+	req, _ := http.NewRequest("GET", "/api/v1/users/123/posts/456/comments/docs/readme.md", nil)
+	rr := httptest.NewRecorder()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		router.ServeHTTP(rr, req)
+	}
+}
+
+// Thêm Benchmark này để chứng minh Router thực sự Zero Allocation
+func BenchmarkRouter_ServeHTTP_True_ZeroAllocation(b *testing.B) {
+	router := NewRouter()
+	router.GET("/api/v1/users/:id/posts/:post_id/comments/*filepath", func(c *Ctx) error {
+		_ = c.Param("id")
+		_ = c.Param("post_id")
+		_ = c.Param("filepath")
+		// Trả về nil thay vì c.Text() để loại bỏ việc ghi Header.Set() của net/http
+		return nil
 	})
 
 	req, _ := http.NewRequest("GET", "/api/v1/users/123/posts/456/comments/docs/readme.md", nil)
