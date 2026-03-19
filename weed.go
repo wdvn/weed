@@ -23,3 +23,7 @@ func (app *App) Serve(port string) error {
 	app.sv.Handler = app.router
 	return app.sv.ListenAndServe()
 }
+
+func (app *App) Use(middle http.MiddlewareFunc) {
+	app.router.Use(middle)
+}

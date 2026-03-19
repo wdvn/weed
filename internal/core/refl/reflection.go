@@ -38,12 +38,12 @@ func ExtractFields(input any, targetTags []string) map[string]any {
 		// 2. Get the value of the "json" tag
 		tag := field.Tag.Get("json")
 
-		// 3. HANDLE json:"-" CASE
+		// 3. Handle json:"-" case
 		if tag == "-" {
 			continue // Completely ignore according to Go JSON specification
 		}
 
-		// 4. HANDLE NO TAG CASE (tag == "")
+		// 4. Handle no tag case (tag == "")
 		// If there is no tag, we have 2 options:
 		// - Ignore (since you want to get by tag)
 		// - Or get by Field name (depending on your needs)

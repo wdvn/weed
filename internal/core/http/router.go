@@ -2,6 +2,7 @@ package http
 
 import (
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -33,13 +34,14 @@ type HandlerFunc func(ctx *Ctx) error
 
 // node represents a Radix Tree (Trie) node optimized for zero allocations.
 type node struct {
-	part     string
-	paramKey string // Pre-computed key for :param and *catchall to avoid string slicing at runtime
-	children []*node
-	isWild   bool // true if it is a param (:id) or catch-all (*filepath)
-	isParam  bool // true if it is a param (:id)
-	isCatch  bool // true if it is a catch-all (*filepath)
-	handler  HandlerFunc
+	part        string
+	paramKey    string // Pre-computed key for :param and *catchall to avoid string slicing at runtime
+	children    []*node
+	isWild      bool // true if it is a param (:id) or catch-all (*filepath)
+	isParam     bool // true if it is a param (:id)
+	isCatch     bool // true if it is a catch-all (*filepath)
+	handler     HandlerFunc
+	middlewares []MiddlewareFunc
 }
 
 func (n *node) insert(path string, parts []string, height int, handler HandlerFunc) {
@@ -59,10 +61,11 @@ func (n *node) insert(path string, parts []string, height int, handler HandlerFu
 
 	if child == nil {
 		child = &node{
-			part:    part,
-			isWild:  part[0] == ':' || part[0] == '*',
-			isParam: part[0] == ':',
-			isCatch: part[0] == '*',
+			part:        part,
+			isWild:      part[0] == ':' || part[0] == '*',
+			isParam:     part[0] == ':',
+			isCatch:     part[0] == '*',
+			middlewares: slices.Clone(n.middlewares),
 		}
 		if child.isParam || child.isCatch {
 			child.paramKey = part[1:] // Pre-slice param name during Router initialization
@@ -129,10 +132,15 @@ func (n *node) search(path string, params *Params) HandlerFunc {
 	return nil
 }
 
+func (n *node) use(middle MiddlewareFunc) {
+	n.middlewares = append(n.middlewares, middle)
+}
+
 // Router is an HTTP routing multiplexer optimized for high concurrency and low RAM usage.
 type Router struct {
-	roots   map[string]*node
-	ctxPool sync.Pool
+	roots       map[string]*node
+	ctxPool     sync.Pool
+	middlewares []MiddlewareFunc
 }
 
 // NewRouter creates a new Router.
@@ -170,7 +178,9 @@ func splitPath(path string) []string {
 func (r *Router) Handle(method string, path string, handler HandlerFunc) {
 	parts := splitPath(path)
 	if _, ok := r.roots[method]; !ok {
-		r.roots[method] = &node{}
+		r.roots[method] = &node{
+			middlewares: r.middlewares,
+		}
 	}
 	r.roots[method].insert(path, parts, 0, handler)
 }
@@ -209,12 +219,13 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	ctx.w = w
 	ctx.cx = req.Context()
 	ctx.params = ctx.params[:0] // Reset length to 0 but keep memory capacity
-
 	// Traverse Radix Tree to find the result, pass params pointer to search
 	handler := root.search(req.URL.Path, &ctx.params)
 	if handler != nil {
-		_ = handler(ctx) // Ignore error in handler based on prototype (can be customized later)
-
+		err := handler(ctx) // Ignore error in handler based on prototype (can be customized later)
+		if err != nil {
+			_ = ctx.Text(500, "Internal Server Error")
+		}
 		// Reset pointers to avoid memory leak if old request/writer are retained
 		ctx.r = nil
 		ctx.w = nil
@@ -244,4 +255,10 @@ func (r *Router) Static(prefix string, root string) {
 		fileServer.ServeHTTP(ctx.w, ctx.r)
 		return nil
 	})
+}
+
+func (r *Router) Use(middle MiddlewareFunc) {
+	for _, node := range r.roots {
+		node.use(middle)
+	}
 }
