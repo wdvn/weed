@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -103,20 +105,20 @@ func TestRouter_Parameters(t *testing.T) {
 }
 
 func TestRouter_CatchAll(t *testing.T) {
-	//router := NewRouter()
-	//router.GET("/static/*filepath", createParamHandler("static"))
-	//router.GET("/files/*path", createParamHandler("files"))
-	//
-	//tests := []routeTestCase{
-	//	{"Catch-all simple", "GET", "/static/css/main.css", http.StatusOK, "static [filepath=css/main.css]"},
-	//	{"Catch-all deeper", "GET", "/static/js/lib/app.js", http.StatusOK, "static [filepath=js/lib/app.js]"},
-	//	{"Catch-all single", "GET", "/static/favicon.ico", http.StatusOK, "static [filepath=favicon.ico]"},
-	//	{"Catch-all empty", "GET", "/static/", http.StatusOK, "static [filepath=]"},
-	//	{"Catch-all strict missing slash", "GET", "/static", http.StatusNotFound, "404 page not found\n"},
-	//	{"Catch-all alternative", "GET", "/files/docs/2023/report.pdf", http.StatusOK, "files [path=docs/2023/report.pdf]"},
-	//}
-	//
-	//runRouteTests(t, router, tests)
+	router := NewRouter()
+	router.GET("/static/*filepath", createParamHandler("static"))
+	router.GET("/files/*path", createParamHandler("files"))
+
+	tests := []routeTestCase{
+		{"Catch-all simple", "GET", "/static/css/main.css", http.StatusOK, "static [filepath=css/main.css]"},
+		{"Catch-all deeper", "GET", "/static/js/lib/app.js", http.StatusOK, "static [filepath=js/lib/app.js]"},
+		{"Catch-all single", "GET", "/static/favicon.ico", http.StatusOK, "static [filepath=favicon.ico]"},
+		{"Catch-all empty", "GET", "/static/", http.StatusOK, "static [filepath=]"},
+		{"Catch-all strict missing slash", "GET", "/static", http.StatusNotFound, "404 page not found\n"},
+		{"Catch-all alternative", "GET", "/files/docs/2023/report.pdf", http.StatusOK, "files [path=docs/2023/report.pdf]"},
+	}
+
+	runRouteTests(t, router, tests)
 }
 
 func TestRouter_ConflictAndPriority(t *testing.T) {
@@ -152,6 +154,40 @@ func TestRouter_EdgeCases(t *testing.T) {
 		{"Trailing slash", "GET", "/api/v1/users", http.StatusOK, "users"},
 		{"Multiple slashes", "GET", "//api///v1//users//", http.StatusNotFound, "users"},
 		{"Missing root slash", "GET", "api/v1/users", http.StatusNotFound, "users"},
+	}
+
+	runRouteTests(t, router, tests)
+}
+
+func TestRouter_Static(t *testing.T) {
+	// Create a temporary directory for static files
+	tempDir := t.TempDir()
+
+	// Create a sample index.html
+	err := os.WriteFile(filepath.Join(tempDir, "index.html"), []byte("<h1>Hello Static</h1>"), 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a sample css file in a sub-directory
+	cssDir := filepath.Join(tempDir, "css")
+	err = os.Mkdir(cssDir, 0755)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = os.WriteFile(filepath.Join(cssDir, "style.css"), []byte("body { color: red; }"), 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	router := NewRouter()
+	router.Static("/public", tempDir)
+
+	tests := []routeTestCase{
+		{"Static file root", "GET", "/public/index.html", http.StatusOK, "<h1>Hello Static</h1>"},
+		{"Static file sub directory", "GET", "/public/css/style.css", http.StatusOK, "body { color: red; }"},
+		{"Static file not found", "GET", "/public/not-exist.html", http.StatusNotFound, "404 page not found\n"},
+		{"Directory listing or index", "GET", "/public/", http.StatusOK, "<pre>\n<a href=\"css/\">css/</a>\n<a href=\"index.html\">index.html</a>\n</pre>\n"},
 	}
 
 	runRouteTests(t, router, tests)

@@ -1,7 +1,6 @@
 package http
 
 import (
-	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -27,19 +26,19 @@ func (ps Params) Get(name string) string {
 }
 
 // HandlerFunc is a custom handler that includes URL parameters.
-// LƯU Ý QUAN TRỌNG: Để đạt được "Zero Allocation", biến `ctx` được lấy từ sync.Pool.
-// Vòng đời của `ctx` chỉ hợp lệ trong lúc function này chạy.
-// TUYỆT ĐỐI KHÔNG truyền `ctx` sang một Goroutine khác. Nếu cần, hãy copy nó.
+// IMPORTANT NOTE: To achieve "Zero Allocation", the `ctx` variable is fetched from sync.Pool.
+// The lifecycle of `ctx` is only valid while this function is running.
+// DO NOT pass `ctx` to another Goroutine. If needed, please copy it.
 type HandlerFunc func(ctx *Ctx) error
 
 // node represents a Radix Tree (Trie) node optimized for zero allocations.
 type node struct {
 	part     string
-	paramKey string // Lưu sẵn key cho :param và *catchall để tránh cắt chuỗi lúc runtime
+	paramKey string // Pre-computed key for :param and *catchall to avoid string slicing at runtime
 	children []*node
-	isWild   bool // true nếu là param (:id) hoặc catch-all (*filepath)
-	isParam  bool // true nếu là param (:id)
-	isCatch  bool // true nếu là catch-all (*filepath)
+	isWild   bool // true if it is a param (:id) or catch-all (*filepath)
+	isParam  bool // true if it is a param (:id)
+	isCatch  bool // true if it is a catch-all (*filepath)
 	handler  HandlerFunc
 }
 
@@ -66,16 +65,16 @@ func (n *node) insert(path string, parts []string, height int, handler HandlerFu
 			isCatch: part[0] == '*',
 		}
 		if child.isParam || child.isCatch {
-			child.paramKey = part[1:] // Cắt sẵn tên param lúc khởi tạo Router
+			child.paramKey = part[1:] // Pre-slice param name during Router initialization
 		}
 		n.children = append(n.children, child)
 	}
 	child.insert(path, parts, height+1, handler)
 }
 
-// search duyệt Tree hoàn toàn không cấp phát RAM (Zero Allocation)
+// search traverses the Tree with zero RAM allocation (Zero Allocation)
 func (n *node) search(path string, params *Params) HandlerFunc {
-	// Bỏ qua các dấu "/" ở đầu
+	// Skip leading "/" characters
 	for len(path) > 0 && path[0] == '/' {
 		path = path[1:]
 	}
@@ -91,10 +90,10 @@ func (n *node) search(path string, params *Params) HandlerFunc {
 		nextPath = ""
 	} else {
 		p = path[:idx]
-		nextPath = path[idx:] // nextPath bắt đầu bằng "/", sẽ được xoá ở vòng lặp sau
+		nextPath = path[idx:] // nextPath starts with "/", which will be removed in the next iteration
 	}
 
-	// 1. Ưu tiên Exact match (Khớp chính xác)
+	// 1. Prioritize Exact match
 	for _, child := range n.children {
 		if child.part == p && !child.isWild {
 			if h := child.search(nextPath, params); h != nil {
@@ -104,19 +103,23 @@ func (n *node) search(path string, params *Params) HandlerFunc {
 		}
 	}
 
-	// 2. Wildcard match (Tham số hoặc Catch-all)
+	// 2. Wildcard match (Parameter or Catch-all)
 	for _, child := range n.children {
 		if child.isParam {
 			origLen := len(*params)
-			*params = append(*params, Param{Key: child.paramKey, Value: p})
+			// Manually increase slice length to avoid `append` causing heap allocations
+			*params = (*params)[:origLen+1]
+			(*params)[origLen] = Param{Key: child.paramKey, Value: p}
 			if h := child.search(nextPath, params); h != nil {
 				return h
 			}
-			// Backtrack lại nếu nhánh này không tìm thấy đích
+			// Backtrack if this branch does not find a destination
 			*params = (*params)[:origLen]
 		} else if child.isCatch {
-			// Trả về toàn bộ phần còn lại (không bao gồm "/" ở đầu do đã xử lý bên trên)
-			*params = append(*params, Param{Key: child.paramKey, Value: path})
+			// Return the entire remaining part (excluding leading "/" as handled above)
+			origLen := len(*params)
+			*params = (*params)[:origLen+1]
+			(*params)[origLen] = Param{Key: child.paramKey, Value: path}
 			if child.handler != nil {
 				return child.handler
 			}
@@ -138,7 +141,7 @@ func NewRouter() *Router {
 		roots: make(map[string]*node),
 		ctxPool: sync.Pool{
 			New: func() any {
-				// Khởi tạo sẵn Ctx với slice params có capacity 20 để zero alloc
+				// Pre-allocate Ctx with a params slice of capacity 20 to ensure zero allocation
 				return &Ctx{
 					params: make(Params, 0, 20),
 				}
@@ -148,7 +151,7 @@ func NewRouter() *Router {
 }
 
 // splitPath splits the path by '/' and ignores empty segments.
-// Hàm này chỉ chạy lúc khởi tạo (Handle), nên Allocation ở đây là hoàn toàn OK.
+// This function only runs during initialization (Handle), so Allocation here is completely OK.
 func splitPath(path string) []string {
 	segments := strings.Split(path, "/")
 	parts := make([]string, 0, len(segments))
@@ -200,23 +203,23 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// Mượn Ctx từ sync.Pool thay vì chỉ mượn Params
+	// Borrow Ctx from sync.Pool instead of just Params
 	ctx := r.ctxPool.Get().(*Ctx)
 	ctx.r = req
 	ctx.w = w
 	ctx.cx = req.Context()
-	ctx.params = ctx.params[:0] // Reset chiều dài về 0 nhưng giữ nguyên memory capacity
+	ctx.params = ctx.params[:0] // Reset length to 0 but keep memory capacity
 
-	// Duyệt Radix Tree để tìm kết quả, truyền pointer params vào search
+	// Traverse Radix Tree to find the result, pass params pointer to search
 	handler := root.search(req.URL.Path, &ctx.params)
 	if handler != nil {
-		_ = handler(ctx) // Bỏ qua error ở handler theo prototype (bạn có thể tuỳ chỉnh sau)
+		_ = handler(ctx) // Ignore error in handler based on prototype (can be customized later)
 
-		// Reset các pointer để tránh memory leak nếu giữ lại request/writer cũ
+		// Reset pointers to avoid memory leak if old request/writer are retained
 		ctx.r = nil
 		ctx.w = nil
 		ctx.cx = nil
-		r.ctxPool.Put(ctx) // Xong việc thì trả Ctx lại vào Pool
+		r.ctxPool.Put(ctx) // Return Ctx to Pool after finishing
 		return
 	}
 
@@ -228,8 +231,16 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Router) Static(prefix string, root string) {
-	fileServer := http.FileServer(http.Dir(root))
-	r.GET(fmt.Sprintf("%s/*", prefix), func(ctx *Ctx) error {
+	// Remove trailing slash for normalization
+	prefix = strings.TrimSuffix(prefix, "/")
+
+	// Use http.StripPrefix to remove prefix from URL before passing to FileServer.
+	// Without this line, a request for "/static/css/style.css" would be searched by FileServer
+	// in the directory "root/static/css/style.css" instead of "root/css/style.css".
+	fileServer := http.StripPrefix(prefix, http.FileServer(http.Dir(root)))
+
+	// Register catch-all route to handle all requests starting with the prefix
+	r.GET(prefix+"/*filepath", func(ctx *Ctx) error {
 		fileServer.ServeHTTP(ctx.w, ctx.r)
 		return nil
 	})
