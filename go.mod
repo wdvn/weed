@@ -1,3 +1,3 @@
 module github.com/wdvn/weed
 
-go 1.24.4
+go 1.26

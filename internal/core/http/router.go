@@ -1,6 +1,7 @@
 package http
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -224,4 +225,12 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	ctx.cx = nil
 	r.ctxPool.Put(ctx)
 	http.NotFound(w, req)
+}
+
+func (r *Router) Static(prefix string, root string) {
+	fileServer := http.FileServer(http.Dir(root))
+	r.GET(fmt.Sprintf("%s/*", prefix), func(ctx *Ctx) error {
+		fileServer.ServeHTTP(ctx.w, ctx.r)
+		return nil
+	})
 }
