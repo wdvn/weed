@@ -5,8 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strconv"
 
-	weedhttp "github.com/wdvn/weed/internal/core/http"
+	weedhttp "github.com/wdvn/weed/core/http"
 )
 
 // RouteDescriptor is an interface that request structs can implement to define their route contract.
@@ -45,11 +46,15 @@ func Handler[Req any, Resp any](h func(context.Context, *Req) (*Resp, error)) we
 		if method == "POST" || method == "PUT" || method == "PATCH" {
 			if c.Request().Body != nil {
 				if err := json.NewDecoder(c.Request().Body).Decode(&req); err != nil {
-					// It's possible the body is empty or not JSON, we can ignore EOF or handle explicitly
-					// For strict contract, decoding error is a bad request
 					return c.JSON(400, map[string]string{"error": "invalid request body: " + err.Error()})
 				}
 			}
+		}
+
+		// Bind path, query, and header parameters based on struct tags
+		reqVal := reflect.ValueOf(&req)
+		if err := bindRequestTags(c, reqVal); err != nil {
+			return c.JSON(400, map[string]string{"error": "invalid request parameters: " + err.Error()})
 		}
 
 		// Execute the strongly-typed handler
@@ -208,6 +213,93 @@ func RegisterInterface[T any](router *weedhttp.RouterGroup, service T) error {
 	return nil
 }
 
+// bindRequestTags inspects the request struct and sets fields based on `path`, `query`, and `header` tags
+func bindRequestTags(c *weedhttp.Ctx, reqVal reflect.Value) error {
+	if reqVal.Kind() == reflect.Ptr {
+		reqVal = reqVal.Elem()
+	}
+
+	if reqVal.Kind() != reflect.Struct {
+		return nil
+	}
+
+	reqType := reqVal.Type()
+	for i := 0; i < reqType.NumField(); i++ {
+		field := reqType.Field(i)
+		fieldVal := reqVal.Field(i)
+
+		if !fieldVal.CanSet() {
+			continue
+		}
+
+		// Check for path param tag
+		if tag := field.Tag.Get("path"); tag != "" {
+			val := c.Param(tag)
+			if val != "" {
+				if err := setFieldValue(fieldVal, val); err != nil {
+					return fmt.Errorf("failed to bind path param %s: %w", tag, err)
+				}
+			}
+		}
+
+		// Check for query param tag
+		if tag := field.Tag.Get("query"); tag != "" {
+			val := c.Query(tag)
+			if val != "" {
+				if err := setFieldValue(fieldVal, val); err != nil {
+					return fmt.Errorf("failed to bind query param %s: %w", tag, err)
+				}
+			}
+		}
+
+		// Check for header param tag
+		if tag := field.Tag.Get("header"); tag != "" {
+			val := c.Request().Header.Get(tag)
+			if val != "" {
+				if err := setFieldValue(fieldVal, val); err != nil {
+					return fmt.Errorf("failed to bind header param %s: %w", tag, err)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// setFieldValue converts a string to the target field type and sets it
+func setFieldValue(field reflect.Value, value string) error {
+	switch field.Kind() {
+	case reflect.String:
+		field.SetString(value)
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		intVal, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			return err
+		}
+		field.SetInt(intVal)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		uintVal, err := strconv.ParseUint(value, 10, 64)
+		if err != nil {
+			return err
+		}
+		field.SetUint(uintVal)
+	case reflect.Float32, reflect.Float64:
+		floatVal, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			return err
+		}
+		field.SetFloat(floatVal)
+	case reflect.Bool:
+		boolVal, err := strconv.ParseBool(value)
+		if err != nil {
+			return err
+		}
+		field.SetBool(boolVal)
+	default:
+		return fmt.Errorf("unsupported field type: %v", field.Kind())
+	}
+	return nil
+}
+
 // createDynamicHandler creates a weedhttp.HandlerFunc that invokes the target method via reflection (for Structs)
 func createDynamicHandler(svcVal reflect.Value, methodFunc reflect.Value, reqType reflect.Type) weedhttp.HandlerFunc {
 	return func(c *weedhttp.Ctx) error {
@@ -221,6 +313,10 @@ func createDynamicHandler(svcVal reflect.Value, methodFunc reflect.Value, reqTyp
 					return c.JSON(400, map[string]string{"error": "invalid request body"})
 				}
 			}
+		}
+
+		if err := bindRequestTags(c, reqVal); err != nil {
+			return c.JSON(400, map[string]string{"error": "invalid request parameters: " + err.Error()})
 		}
 
 		ctxVal := reflect.ValueOf(c.Request().Context())
@@ -243,6 +339,10 @@ func createDynamicHandlerFromValue(methodVal reflect.Value, reqType reflect.Type
 					return c.JSON(400, map[string]string{"error": "invalid request body"})
 				}
 			}
+		}
+
+		if err := bindRequestTags(c, reqVal); err != nil {
+			return c.JSON(400, map[string]string{"error": "invalid request parameters: " + err.Error()})
 		}
 
 		ctxVal := reflect.ValueOf(c.Request().Context())
