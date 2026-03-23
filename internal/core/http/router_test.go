@@ -193,6 +193,57 @@ func TestRouter_Static(t *testing.T) {
 	runRouteTests(t, router, tests)
 }
 
+func TestRouterGroup(t *testing.T) {
+	router := NewRouter()
+
+	// Create a simple middleware that appends text to the response body
+	middlewareA := func(next HandlerFunc) HandlerFunc {
+		return func(c *Ctx) error {
+			c.w.Write([]byte("midA>"))
+			return next(c)
+		}
+	}
+
+	middlewareB := func(next HandlerFunc) HandlerFunc {
+		return func(c *Ctx) error {
+			c.w.Write([]byte("midB>"))
+			return next(c)
+		}
+	}
+
+	// Global middleware
+	router.Use(middlewareA)
+	router.GET("/root", createHandler("root"))
+
+	// Group with its own middleware
+	v1 := router.Group("/v1", middlewareB)
+	v1.GET("/users", createHandler("users"))
+	v1.POST("/users", createHandler("create_user"))
+
+	// Nested group
+	v2 := v1.Group("/v2")
+	v2.GET("/posts", createHandler("posts"))
+
+	// Group with static files
+	tempDir := t.TempDir()
+	err := os.WriteFile(filepath.Join(tempDir, "test.txt"), []byte("group static"), 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v1.Static("/assets", tempDir)
+
+	tests := []routeTestCase{
+		{"Root route with global middleware", "GET", "/root", http.StatusOK, "midA>root"},
+		{"Group route with combined middlewares", "GET", "/v1/users", http.StatusOK, "midA>midB>users"},
+		{"Group route POST", "POST", "/v1/users", http.StatusOK, "midA>midB>create_user"},
+		{"Nested group route", "GET", "/v1/v2/posts", http.StatusOK, "midA>midB>posts"},
+		{"Group static file", "GET", "/v1/assets/test.txt", http.StatusOK, "group static"},
+		{"Not found in group", "GET", "/v1/notfound", http.StatusNotFound, "404 page not found\n"},
+	}
+
+	runRouteTests(t, router, tests)
+}
+
 func BenchmarkRouter_ServeHTTP_ZeroAllocation(b *testing.B) {
 	router := NewRouter()
 	router.GET("/api/v1/users/:id/posts/:post_id/comments/*filepath", func(c *Ctx) error {

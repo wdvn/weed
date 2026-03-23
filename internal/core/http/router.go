@@ -136,16 +136,41 @@ func (n *node) search(path string, params *Params) *node {
 	return nil
 }
 
+// RouterGroup represents a group of routes that share a common prefix and middlewares.
+type RouterGroup struct {
+	prefix      string
+	middlewares []MiddlewareFunc
+	router      *Router
+}
+
+// Group creates a new RouterGroup with the given prefix and middlewares.
+func (g *RouterGroup) Group(prefix string, middlewares ...MiddlewareFunc) *RouterGroup {
+	newMiddlewares := make([]MiddlewareFunc, 0, len(g.middlewares)+len(middlewares))
+	newMiddlewares = append(newMiddlewares, g.middlewares...)
+	newMiddlewares = append(newMiddlewares, middlewares...)
+
+	return &RouterGroup{
+		prefix:      g.prefix + prefix,
+		middlewares: newMiddlewares,
+		router:      g.router,
+	}
+}
+
+// Use adds middlewares to the group.
+func (g *RouterGroup) Use(middlewares ...MiddlewareFunc) {
+	g.middlewares = append(g.middlewares, middlewares...)
+}
+
 // Router is an HTTP routing multiplexer optimized for high concurrency and low RAM usage.
 type Router struct {
-	roots       map[string]*node
-	ctxPool     sync.Pool
-	middlewares []MiddlewareFunc
+	*RouterGroup
+	roots   map[string]*node
+	ctxPool sync.Pool
 }
 
 // NewRouter creates a new Router.
 func NewRouter() *Router {
-	return &Router{
+	r := &Router{
 		roots: make(map[string]*node),
 		ctxPool: sync.Pool{
 			New: func() any {
@@ -156,6 +181,11 @@ func NewRouter() *Router {
 			},
 		},
 	}
+	r.RouterGroup = &RouterGroup{
+		prefix: "",
+		router: r,
+	}
+	return r
 }
 
 // splitPath splits the path by '/' and ignores empty segments.
@@ -175,14 +205,15 @@ func splitPath(path string) []string {
 }
 
 // Handle registers a new request handler with the given path and method.
-func (r *Router) Handle(method string, path string, handler HandlerFunc) {
-	parts := splitPath(path)
-	if _, ok := r.roots[method]; !ok {
-		r.roots[method] = &node{}
+func (g *RouterGroup) Handle(method string, path string, handler HandlerFunc) {
+	fullPath := g.prefix + path
+	parts := splitPath(fullPath)
+	if _, ok := g.router.roots[method]; !ok {
+		g.router.roots[method] = &node{}
 	}
-	// Wrap the handler with all registered global middlewares
-	wrappedHandler := wrapHandler(handler, r.middlewares)
-	r.roots[method].insert(path, parts, 0, wrappedHandler)
+	// Wrap the handler with all registered middlewares for this group
+	wrappedHandler := wrapHandler(handler, g.middlewares)
+	g.router.roots[method].insert(fullPath, parts, 0, wrappedHandler)
 }
 
 // ServeHTTP makes the Router implement the http.Handler interface.
@@ -221,44 +252,40 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	http.NotFound(w, req)
 }
 
-func (r *Router) Use(middle ...MiddlewareFunc) {
-	// Append middlewares so any future routes registered will be wrapped with them
-	r.middlewares = append(r.middlewares, middle...)
-}
-
 //--------------METHOD----------------
 
 // GET is a shortcut for Handle(http.MethodGet, path, handler)
-func (r *Router) GET(path string, handler HandlerFunc) {
-	r.Handle(http.MethodGet, path, handler)
+func (g *RouterGroup) GET(path string, handler HandlerFunc) {
+	g.Handle(http.MethodGet, path, handler)
 }
 
 // POST is a shortcut for Handle(http.MethodPost, path, handler)
-func (r *Router) POST(path string, handler HandlerFunc) {
-	r.Handle(http.MethodPost, path, handler)
+func (g *RouterGroup) POST(path string, handler HandlerFunc) {
+	g.Handle(http.MethodPost, path, handler)
 }
 
 // PUT is a shortcut for Handle(http.MethodPut, path, handler)
-func (r *Router) PUT(path string, handler HandlerFunc) {
-	r.Handle(http.MethodPut, path, handler)
+func (g *RouterGroup) PUT(path string, handler HandlerFunc) {
+	g.Handle(http.MethodPut, path, handler)
 }
 
 // DELETE is a shortcut for Handle(http.MethodDelete, path, handler)
-func (r *Router) DELETE(path string, handler HandlerFunc) {
-	r.Handle(http.MethodDelete, path, handler)
+func (g *RouterGroup) DELETE(path string, handler HandlerFunc) {
+	g.Handle(http.MethodDelete, path, handler)
 }
 
-func (r *Router) Static(prefix string, root string) {
+func (g *RouterGroup) Static(prefix string, root string) {
 	// Remove trailing slash for normalization
 	prefix = strings.TrimSuffix(prefix, "/")
+	fullPrefix := g.prefix + prefix
 
 	// Use http.StripPrefix to remove prefix from URL before passing to FileServer.
 	// Without this line, a request for "/static/css/style.css" would be searched by FileServer
 	// in the directory "root/static/css/style.css" instead of "root/css/style.css".
-	fileServer := http.StripPrefix(prefix, http.FileServer(http.Dir(root)))
+	fileServer := http.StripPrefix(fullPrefix, http.FileServer(http.Dir(root)))
 
 	// Register catch-all route to handle all requests starting with the prefix
-	r.GET(prefix+"/*filepath", func(ctx *Ctx) error {
+	g.GET(prefix+"/*filepath", func(ctx *Ctx) error {
 		fileServer.ServeHTTP(ctx.w, ctx.r)
 		return nil
 	})
