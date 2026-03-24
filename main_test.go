@@ -2,7 +2,7 @@ package weed
 
 import (
 	"fmt"
-	"github.com/wdvn/weed/internal/core/http"
+	"github.com/wdvn/weed/core/http"
 	"testing"
 	"time"
 )
