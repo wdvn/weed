@@ -77,12 +77,13 @@ func Handler[Req any, Resp any](h func(context.Context, *Req) (*Resp, error)) we
 // these routes onto the provided RouterGroup.
 //
 // Deprecated: Consider using RegisterInterface for stronger contract-driven development.
-func Register(router *weedhttp.RouterGroup, service any) error {
+func Register(router *weedhttp.RouterGroup, service any) ([]RouteMeta, error) {
+	var metas []RouteMeta
 	svcType := reflect.TypeOf(service)
 	svcVal := reflect.ValueOf(service)
 
 	if svcType.Kind() != reflect.Ptr || svcVal.Elem().Kind() != reflect.Struct {
-		return fmt.Errorf("service must be a pointer to a struct")
+		return nil, fmt.Errorf("service must be a pointer to a struct")
 	}
 
 	ctxType := reflect.TypeOf((*context.Context)(nil)).Elem()
@@ -133,27 +134,35 @@ func Register(router *weedhttp.RouterGroup, service any) error {
 
 		// Register with the router
 		router.Handle(httpMethod, httpPath, handler)
+
+		metas = append(metas, RouteMeta{
+			Method:   httpMethod,
+			Path:     httpPath,
+			ReqType:  reqType.Elem(),
+			RespType: mType.Out(0).Elem(), // Pointer to response
+		})
 	}
 
-	return nil
+	return metas, nil
 }
 
 // RegisterInterface registers routes based on an interface definition.
 // T must be an interface type. service must be an implementation of T.
 // This allows true contract-driven design where the interface acts as the router contract.
-func RegisterInterface[T any](router *weedhttp.RouterGroup, service T) error {
+func RegisterInterface[T any](router *weedhttp.RouterGroup, service T) ([]RouteMeta, error) {
+	var metas []RouteMeta
 	// Get the interface type from the generic parameter T
 	ifaceType := reflect.TypeOf((*T)(nil)).Elem()
 
 	if ifaceType.Kind() != reflect.Interface {
-		return fmt.Errorf("T must be an interface type")
+		return nil, fmt.Errorf("T must be an interface type")
 	}
 
 	svcVal := reflect.ValueOf(service)
 
 	// Ensure the service actually implements the interface
 	if !reflect.TypeOf(service).Implements(ifaceType) {
-		return fmt.Errorf("service does not implement interface %s", ifaceType.Name())
+		return nil, fmt.Errorf("service does not implement interface %s", ifaceType.Name())
 	}
 
 	ctxType := reflect.TypeOf((*context.Context)(nil)).Elem()
@@ -201,16 +210,23 @@ func RegisterInterface[T any](router *weedhttp.RouterGroup, service T) error {
 		// Find the actual method implementation on the service struct
 		implMethodVal := svcVal.MethodByName(method.Name)
 		if !implMethodVal.IsValid() {
-			return fmt.Errorf("method %s not found on service implementation", method.Name)
+			return nil, fmt.Errorf("method %s not found on service implementation", method.Name)
 		}
 
 		// Create the handler using the actual implementation method value
 		handler := createDynamicHandlerFromValue(implMethodVal, reqType)
 
 		router.Handle(httpMethod, httpPath, handler)
+
+		metas = append(metas, RouteMeta{
+			Method:   httpMethod,
+			Path:     httpPath,
+			ReqType:  reqType.Elem(),
+			RespType: mType.Out(0).Elem(), // Pointer to response
+		})
 	}
 
-	return nil
+	return metas, nil
 }
 
 // bindRequestTags inspects the request struct and sets fields based on `path`, `query`, and `header` tags

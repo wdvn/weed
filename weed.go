@@ -1,8 +1,11 @@
 package weed
 
 import (
+	"encoding/json"
 	"fmt"
 	std "net/http"
+	"reflect"
+	"strings"
 
 	"github.com/wdvn/weed/core/driven/rest"
 	"github.com/wdvn/weed/core/http"
@@ -21,15 +24,17 @@ type MiddlewareFunc = http.MiddlewareFunc
 type RouterGroup = http.RouterGroup
 
 type App struct {
-	router *http.Router
-	sv     std.Server
+	router     *http.Router
+	sv         std.Server
+	routesMeta []rest.RouteMeta
 }
 
 func New() *App {
 	r := http.NewRouter()
 	return &App{
-		router: r,
-		sv:     std.Server{Handler: r},
+		router:     r,
+		sv:         std.Server{Handler: r},
+		routesMeta: make([]rest.RouteMeta, 0),
 	}
 }
 
@@ -77,7 +82,12 @@ func (app *App) Static(prefix string, root string) {
 //
 // Deprecated: Consider using RegisterInterface for stronger contract-driven development.
 func (app *App) Register(service any) error {
-	return rest.Register(app.router.RouterGroup, service)
+	metas, err := rest.Register(app.router.RouterGroup, service)
+	if err != nil {
+		return err
+	}
+	app.routesMeta = append(app.routesMeta, metas...)
+	return nil
 }
 
 // RegisterInterface registers routes based on an interface definition.
@@ -85,10 +95,183 @@ func (app *App) Register(service any) error {
 // T must be an interface type, and service must be an implementation of T.
 // Note: Go does not support generic methods on structs, so this is a standalone function.
 func RegisterInterface[T any](app *App, service T) error {
-	return rest.RegisterInterface[T](app.router.RouterGroup, service)
+	metas, err := rest.RegisterInterface[T](app.router.RouterGroup, service)
+	if err != nil {
+		return err
+	}
+	app.routesMeta = append(app.routesMeta, metas...)
+	return nil
 }
 
 // RegisterGroupInterface registers routes based on an interface definition to a specific RouterGroup.
+// Note: Metadata from this is currently not tracked in App. If you want swagger generation, use RegisterInterface on the App.
 func RegisterGroupInterface[T any](group *RouterGroup, service T) error {
-	return rest.RegisterInterface[T](group, service)
+	_, err := rest.RegisterInterface[T](group, service)
+	return err
+}
+
+// GenerateOpenAPI generates an OpenAPI 3.0 JSON specification from the registered routes.
+func (app *App) GenerateOpenAPI() []byte {
+	openapi := map[string]interface{}{
+		"openapi": "3.0.0",
+		"info": map[string]interface{}{
+			"title":   "Weed App API",
+			"version": "1.0.0",
+		},
+		"paths": make(map[string]interface{}),
+	}
+
+	paths := openapi["paths"].(map[string]interface{})
+
+	// Helper to convert go type to openapi type
+	var getOpenAPIType func(t reflect.Type) map[string]interface{}
+	getOpenAPIType = func(t reflect.Type) map[string]interface{} {
+		if t.Kind() == reflect.Ptr {
+			return getOpenAPIType(t.Elem())
+		}
+
+		switch t.Kind() {
+		case reflect.String:
+			return map[string]interface{}{"type": "string"}
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+			reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			return map[string]interface{}{"type": "integer"}
+		case reflect.Float32, reflect.Float64:
+			return map[string]interface{}{"type": "number"}
+		case reflect.Bool:
+			return map[string]interface{}{"type": "boolean"}
+		case reflect.Slice, reflect.Array:
+			return map[string]interface{}{
+				"type":  "array",
+				"items": getOpenAPIType(t.Elem()),
+			}
+		case reflect.Struct:
+			props := make(map[string]interface{})
+			for i := 0; i < t.NumField(); i++ {
+				field := t.Field(i)
+				jsonTag := field.Tag.Get("json")
+				if jsonTag == "-" {
+					continue
+				}
+				name := field.Name
+				if jsonTag != "" {
+					name = strings.Split(jsonTag, ",")[0]
+				}
+				props[name] = getOpenAPIType(field.Type)
+			}
+			return map[string]interface{}{
+				"type":       "object",
+				"properties": props,
+			}
+		default:
+			return map[string]interface{}{"type": "string"}
+		}
+	}
+
+	for _, meta := range app.routesMeta {
+		// Clean path for OpenAPI (e.g. /users/:id -> /users/{id})
+		openApiPath := meta.Path
+		parts := strings.Split(openApiPath, "/")
+		for i, p := range parts {
+			if strings.HasPrefix(p, ":") {
+				parts[i] = "{" + p[1:] + "}"
+			}
+		}
+		openApiPath = strings.Join(parts, "/")
+
+		if _, exists := paths[openApiPath]; !exists {
+			paths[openApiPath] = make(map[string]interface{})
+		}
+
+		pathItem := paths[openApiPath].(map[string]interface{})
+		methodLower := strings.ToLower(meta.Method)
+
+		operation := map[string]interface{}{
+			"responses": map[string]interface{}{
+				"200": map[string]interface{}{
+					"description": "Successful response",
+					"content": map[string]interface{}{
+						"application/json": map[string]interface{}{
+							"schema": getOpenAPIType(meta.RespType),
+						},
+					},
+				},
+			},
+		}
+
+		// Parse Request struct to generate parameters and requestBody
+		var parameters []interface{}
+		var bodyProps map[string]interface{}
+
+		if meta.ReqType != nil && meta.ReqType.Kind() == reflect.Struct {
+			bodyProps = make(map[string]interface{})
+
+			for i := 0; i < meta.ReqType.NumField(); i++ {
+				field := meta.ReqType.Field(i)
+
+				// Handle Path parameters
+				if pathTag := field.Tag.Get("path"); pathTag != "" {
+					parameters = append(parameters, map[string]interface{}{
+						"name":     pathTag,
+						"in":       "path",
+						"required": true,
+						"schema":   getOpenAPIType(field.Type),
+					})
+					continue
+				}
+
+				// Handle Query parameters
+				if queryTag := field.Tag.Get("query"); queryTag != "" {
+					parameters = append(parameters, map[string]interface{}{
+						"name":   queryTag,
+						"in":     "query",
+						"schema": getOpenAPIType(field.Type),
+					})
+					continue
+				}
+
+				// Handle Header parameters
+				if headerTag := field.Tag.Get("header"); headerTag != "" {
+					parameters = append(parameters, map[string]interface{}{
+						"name":   headerTag,
+						"in":     "header",
+						"schema": getOpenAPIType(field.Type),
+					})
+					continue
+				}
+
+				// Otherwise, it's considered part of the JSON body
+				jsonTag := field.Tag.Get("json")
+				if jsonTag != "-" {
+					name := field.Name
+					if jsonTag != "" {
+						name = strings.Split(jsonTag, ",")[0]
+					}
+					bodyProps[name] = getOpenAPIType(field.Type)
+				}
+			}
+		}
+
+		if len(parameters) > 0 {
+			operation["parameters"] = parameters
+		}
+
+		if (meta.Method == "POST" || meta.Method == "PUT" || meta.Method == "PATCH") && len(bodyProps) > 0 {
+			operation["requestBody"] = map[string]interface{}{
+				"content": map[string]interface{}{
+					"application/json": map[string]interface{}{
+						"schema": map[string]interface{}{
+							"type":       "object",
+							"properties": bodyProps,
+						},
+					},
+				},
+			}
+		}
+
+		pathItem[methodLower] = operation
+	}
+
+	b, _ := json.MarshalIndent(openapi, "", "  ")
+	return b
 }
