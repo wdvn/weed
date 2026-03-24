@@ -59,3 +59,8 @@ func (app *App) DELETE(path string, handler HandlerFunc) {
 func (app *App) Group(prefix string, middlewares ...http.MiddlewareFunc) *http.RouterGroup {
 	return app.router.Group(prefix, middlewares...)
 }
+
+// Static serves static files from the given root directory
+func (app *App) Static(prefix string, root string) {
+	app.router.Static(prefix, root)
+}
