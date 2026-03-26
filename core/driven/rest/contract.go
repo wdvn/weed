@@ -119,14 +119,14 @@ func Mount(router *weedhttp.RouterGroup, name string, service any) ([]RouteMeta,
 		}
 
 		// Create a dynamic HandlerFunc that bridges the weedhttp.Ctx to the reflect method call
-		handler := createDynamicHandlerFromValue(method.Func, reqType)
+		handler := createDynamicHandlerFromValue(svcVal, method.Func, reqType)
 
 		// Register with the router
 		group.Handle(httpMethod, httpPath, handler)
 
 		metas = append(metas, RouteMeta{
 			Method:   httpMethod,
-			Path:     httpPath,
+			Path:     fmt.Sprintf("/%s%s", name, httpPath),
 			ReqType:  reqType.Elem(),
 			RespType: mType.Out(0).Elem(), // Pointer to response
 			Tag:      name,
@@ -224,7 +224,7 @@ func setFieldValue(field reflect.Value, value string) error {
 }
 
 // createDynamicHandlerFromValue creates a weedhttp.HandlerFunc from an already bound method value (for Interfaces)
-func createDynamicHandlerFromValue(methodVal reflect.Value, reqType reflect.Type) weedhttp.HandlerFunc {
+func createDynamicHandlerFromValue(svc, methodVal reflect.Value, reqType reflect.Type) weedhttp.HandlerFunc {
 	return func(c *weedhttp.Ctx) error {
 		reqVal := reflect.New(reqType.Elem())
 		reqPtr := reqVal.Interface()
@@ -243,7 +243,7 @@ func createDynamicHandlerFromValue(methodVal reflect.Value, reqType reflect.Type
 		}
 
 		ctxVal := reflect.ValueOf(c.Request().Context())
-		results := methodVal.Call([]reflect.Value{ctxVal, reqVal})
+		results := methodVal.Call([]reflect.Value{svc, ctxVal, reqVal})
 
 		return processResults(c, results)
 	}

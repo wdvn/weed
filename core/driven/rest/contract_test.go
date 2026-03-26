@@ -121,7 +121,7 @@ func TestRegister(t *testing.T) {
 	router := weedhttp.NewRouter()
 	svc := &UserService{}
 
-	err := Register(router.RouterGroup, svc)
+	_, err := Mount(router.RouterGroup, "api", svc)
 	if err != nil {
 		t.Fatalf("Failed to register service: %v", err)
 	}
@@ -197,82 +197,6 @@ func TestRegister(t *testing.T) {
 
 		if rr.Code != http.StatusUnauthorized {
 			t.Errorf("Expected status 401, got %d", rr.Code)
-		}
-	})
-}
-
-func TestRegisterInterface(t *testing.T) {
-	router := weedhttp.NewRouter()
-
-	// Create the implementation instance
-	svcImpl := &UserServiceImpl{}
-
-	// Register the interface definition IUserService with its implementation svcImpl
-	err := Mount[IUserService](router.RouterGroup, svcImpl)
-	if err != nil {
-		t.Fatalf("Failed to register interface: %v", err)
-	}
-
-	t.Run("Valid POST request via Interface", func(t *testing.T) {
-		reqBody := `{"name":"Charlie","age":25}`
-		req := httptest.NewRequest("POST", "/api/users", bytes.NewBufferString(reqBody))
-		req.Header.Set("Content-Type", "application/json")
-		rr := httptest.NewRecorder()
-
-		router.ServeHTTP(rr, req)
-
-		if rr.Code != http.StatusOK {
-			t.Errorf("Expected status 200, got %d", rr.Code)
-		}
-
-		var resp CreateUserResp
-		if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
-			t.Fatalf("Failed to unmarshal response: %v", err)
-		}
-
-		if resp.ID != "456" || resp.Name != "Charlie" {
-			t.Errorf("Unexpected response body: %s", rr.Body.String())
-		}
-	})
-
-	t.Run("Valid GET request via Interface with path param binding", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/api/users/999", nil)
-		rr := httptest.NewRecorder()
-
-		router.ServeHTTP(rr, req)
-
-		if rr.Code != http.StatusOK {
-			t.Errorf("Expected status 200, got %d", rr.Code)
-		}
-
-		var resp GetUserResp
-		if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
-			t.Fatalf("Failed to unmarshal response: %v", err)
-		}
-
-		if resp.ID != "999" || resp.Name != "Bob" {
-			t.Errorf("Unexpected response body: %s", rr.Body.String())
-		}
-	})
-
-	t.Run("Valid GET request via Interface with query and header binding", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/api/users?q=hello", nil)
-		req.Header.Set("X-Token", "secret")
-		rr := httptest.NewRecorder()
-
-		router.ServeHTTP(rr, req)
-
-		if rr.Code != http.StatusOK {
-			t.Errorf("Expected status 200, got %d", rr.Code)
-		}
-
-		var resp GetUserResp
-		if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
-			t.Fatalf("Failed to unmarshal response: %v", err)
-		}
-
-		if resp.ID != "search-hello" {
-			t.Errorf("Unexpected response body: %s", rr.Body.String())
 		}
 	})
 }
