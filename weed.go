@@ -77,32 +77,6 @@ func (app *App) Static(prefix string, root string) {
 	app.router.Static(prefix, root)
 }
 
-// Register maps an implementation of a contract to the root router group.
-// It iterates through the service methods and automatically binds routes based on RouteDescriptor requests.
-//
-// Deprecated: Consider using RegisterInterface for stronger contract-driven development.
-func (app *App) Register(service any) error {
-	metas, err := rest.Register(app.router.RouterGroup, service)
-	if err != nil {
-		return err
-	}
-	app.routesMeta = append(app.routesMeta, metas...)
-	return nil
-}
-
-// RegisterInterface registers routes based on an interface definition.
-// This allows true contract-driven design where the interface acts as the router contract.
-// T must be an interface type, and service must be an implementation of T.
-// Note: Go does not support generic methods on structs, so this is a standalone function.
-func RegisterInterface[T any](app *App, service T) error {
-	metas, err := rest.RegisterInterface[T](app.router.RouterGroup, service)
-	if err != nil {
-		return err
-	}
-	app.routesMeta = append(app.routesMeta, metas...)
-	return nil
-}
-
 // RegisterGroupInterface registers routes based on an interface definition to a specific RouterGroup.
 // Note: Metadata from this is currently not tracked in App. If you want swagger generation, use RegisterInterface on the App.
 func RegisterGroupInterface[T any](group *RouterGroup, service T) error {
@@ -274,4 +248,13 @@ func (app *App) GenerateOpenAPI() []byte {
 
 	b, _ := json.MarshalIndent(openapi, "", "  ")
 	return b
+}
+
+func (app *App) AddService(sv any) {
+	metas, err := rest.RegisterInterface[T](app.router.RouterGroup, service)
+	if err != nil {
+		return err
+	}
+	app.routesMeta = append(app.routesMeta, metas...)
+	return nil
 }
