@@ -8,4 +8,5 @@ type RouteMeta struct {
 	Path     string
 	ReqType  reflect.Type
 	RespType reflect.Type
+	Tag      string //using for service name => open api tag
 }

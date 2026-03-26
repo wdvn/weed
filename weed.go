@@ -77,13 +77,6 @@ func (app *App) Static(prefix string, root string) {
 	app.router.Static(prefix, root)
 }
 
-// RegisterGroupInterface registers routes based on an interface definition to a specific RouterGroup.
-// Note: Metadata from this is currently not tracked in App. If you want swagger generation, use RegisterInterface on the App.
-func RegisterGroupInterface[T any](group *RouterGroup, service T) error {
-	_, err := rest.RegisterInterface[T](group, service)
-	return err
-}
-
 // GenerateOpenAPI generates an OpenAPI 3.0 JSON specification from the registered routes.
 func (app *App) GenerateOpenAPI() []byte {
 	openapi := map[string]interface{}{
@@ -250,8 +243,8 @@ func (app *App) GenerateOpenAPI() []byte {
 	return b
 }
 
-func (app *App) AddService(sv any) {
-	metas, err := rest.RegisterInterface[T](app.router.RouterGroup, service)
+func (app *App) AddService(name string, sv any) error {
+	metas, err := rest.Mount(app.router.RouterGroup, name, sv)
 	if err != nil {
 		return err
 	}

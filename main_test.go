@@ -2,9 +2,10 @@ package weed
 
 import (
 	"fmt"
-	"github.com/wdvn/weed/core/http"
 	"testing"
 	"time"
+
+	"github.com/wdvn/weed/core/http"
 )
 
 func TestApp_Serve(t *testing.T) {

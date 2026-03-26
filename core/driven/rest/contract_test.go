@@ -208,7 +208,7 @@ func TestRegisterInterface(t *testing.T) {
 	svcImpl := &UserServiceImpl{}
 
 	// Register the interface definition IUserService with its implementation svcImpl
-	err := RegisterInterface[IUserService](router.RouterGroup, svcImpl)
+	err := Mount[IUserService](router.RouterGroup, svcImpl)
 	if err != nil {
 		t.Fatalf("Failed to register interface: %v", err)
 	}
