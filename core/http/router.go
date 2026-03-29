@@ -164,8 +164,9 @@ func (g *RouterGroup) Use(middlewares ...MiddlewareFunc) {
 // Router is an HTTP routing multiplexer optimized for high concurrency and low RAM usage.
 type Router struct {
 	*RouterGroup
-	roots   map[string]*node
-	ctxPool sync.Pool
+	roots    map[string]*node
+	ctxPool  sync.Pool
+	renderer Renderer
 }
 
 // NewRouter creates a new Router.
@@ -175,9 +176,10 @@ func NewRouter() *Router {
 		ctxPool: sync.Pool{
 			New: func() any {
 				// Pre-allocate Ctx with a params slice of capacity 20 to ensure zero allocation
-				return &Ctx{
+				ctx := &Ctx{
 					params: make(Params, 0, 20),
 				}
+				return ctx
 			},
 		},
 	}
@@ -216,6 +218,11 @@ func (g *RouterGroup) Handle(method string, path string, handler HandlerFunc) {
 	g.router.roots[method].insert(fullPath, parts, 0, wrappedHandler)
 }
 
+// SetRenderer sets the template renderer used for all Ctx.Render() calls.
+func (r *Router) SetRenderer(renderer Renderer) {
+	r.renderer = renderer
+}
+
 // ServeHTTP makes the Router implement the http.Handler interface.
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	root, ok := r.roots[req.Method]
@@ -226,20 +233,25 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	// Borrow Ctx from sync.Pool instead of just Params
 	ctx := r.ctxPool.Get().(*Ctx)
+	resp := newResponse(w)
 	ctx.r = req
-	ctx.w = w
+	ctx.resp = resp
+	ctx.w = resp // underlying writer is the Response wrapper
 	ctx.cx = req.Context()
 	ctx.params = ctx.params[:0] // Reset length to 0 but keep memory capacity
+	ctx.store = nil             // reset per-request store
+	ctx.renderer = r.renderer   // inject renderer
 	// Traverse Radix Tree to find the result, pass params pointer to search
 	n := root.search(req.URL.Path, &ctx.params)
 	if n != nil && n.handler != nil {
-		err := n.handler(ctx) // Ignore error in handler based on prototype (can be customized later)
+		err := n.handler(ctx)
 		if err != nil {
 			_ = ctx.Text(500, "Internal Server Error")
 		}
 		// Reset pointers to avoid memory leak if old request/writer are retained
 		ctx.r = nil
 		ctx.w = nil
+		ctx.resp = nil
 		ctx.cx = nil
 		r.ctxPool.Put(ctx) // Return Ctx to Pool after finishing
 		return
@@ -247,6 +259,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	ctx.r = nil
 	ctx.w = nil
+	ctx.resp = nil
 	ctx.cx = nil
 	r.ctxPool.Put(ctx)
 	http.NotFound(w, req)

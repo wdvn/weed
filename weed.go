@@ -20,6 +20,18 @@ type MiddlewareFunc = http.MiddlewareFunc
 // RouterGroup is an alias for the router group
 type RouterGroup = http.RouterGroup
 
+// Renderer is the interface for template renderers (mirrors echo.Renderer).
+type Renderer = http.Renderer
+
+// Response is the response wrapper that tracks Committed state (mirrors echo.Response).
+type Response = http.Response
+
+// HTTPError represents an HTTP error with a code and message (mirrors echo.HTTPError).
+type HTTPError = http.HTTPError
+
+// NewHTTPError creates a new HTTPError (mirrors echo.NewHTTPError).
+var NewHTTPError = http.NewHTTPError
+
 type App struct {
 	router     *http.Router
 	sv         std.Server
@@ -72,6 +84,11 @@ func (app *App) Group(prefix string, middlewares ...MiddlewareFunc) *RouterGroup
 // Static serves static files from the given root directory
 func (app *App) Static(prefix string, root string) {
 	app.router.Static(prefix, root)
+}
+
+// SetRenderer sets the template renderer for all contexts served by this app.
+func (app *App) SetRenderer(r Renderer) {
+	app.router.SetRenderer(r)
 }
 
 func (app *App) AddService(name string, sv any) error {
