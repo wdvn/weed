@@ -73,7 +73,7 @@ func Handler[Req any, Resp any](h func(context.Context, *Req) (*Resp, error)) we
 // Mount registers routes based on an interface definition.
 // T must be an interface type. service must be an implementation of T.
 // This allows true contract-driven design where the interface acts as the router contract.
-func Mount(router *weedhttp.RouterGroup, name string, service any) ([]RouteMeta, error) {
+func Mount(router *weedhttp.RouterGroup, name string, service any, middleware ...weedhttp.MiddlewareFunc) ([]RouteMeta, error) {
 	var metas []RouteMeta
 	svcType := reflect.TypeOf(service)
 	svcVal := reflect.ValueOf(service)
@@ -123,7 +123,7 @@ func Mount(router *weedhttp.RouterGroup, name string, service any) ([]RouteMeta,
 		handler := createDynamicHandlerFromValue(svcVal, method.Func, reqType)
 
 		// Register with the router
-		group.Handle(httpMethod, httpPath, handler)
+		group.Handle(httpMethod, httpPath, handler, middleware...)
 
 		metas = append(metas, RouteMeta{
 			Method:   httpMethod,

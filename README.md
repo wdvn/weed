@@ -1,6 +1,6 @@
 # 🌿 Weed Framework
 
-Weed is a lightweight, high-performance web framework for Go — zero dependency, zero allocation routing, and contract-driven API development.
+Weed is a lightweight web framework for Go — zero dependency, zero allocation routing, and contract-driven API development.It is inspired by echo framework, created to make MCP rapid development easier.
 
 ## Features
 

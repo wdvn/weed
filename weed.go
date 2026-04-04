@@ -95,12 +95,12 @@ func (app *App) RoutesMeta() []meta.RouteMeta {
 	return meta.All()
 }
 
-func (app *App) AddService(name string, sv any) error {
-	_, err := rest.Mount(app.router.RouterGroup, name, sv)
+func (app *App) AddService(name string, sv any, middleware ...MiddlewareFunc) error {
+	_, err := rest.Mount(app.router.RouterGroup, name, sv, middleware...)
 	return err
 }
 
-func (app *App) AddServiceToGroup(group *RouterGroup, name string, sv any) error {
-	_, err := rest.Mount(group, name, sv)
+func (app *App) AddServiceToGroup(group *RouterGroup, name string, sv any, middleware ...MiddlewareFunc) error {
+	_, err := rest.Mount(group, name, sv, middleware...)
 	return err
 }
