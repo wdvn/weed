@@ -65,3 +65,53 @@ func (app *App) SwaggerAutoServe(path string) {
 		return c.Html(200, html)
 	})
 }
+
+// Scalar serves a Scalar API Reference UI for the given openapi.json data at the specified path.
+// For example, if path is "/docs", the UI is available at "/docs" and the JSON at "/docs/openapi.json".
+func (app *App) Scalar(path string, openapiJSON []byte) {
+	if len(path) > 0 && path[len(path)-1] == '/' {
+		path = path[:len(path)-1]
+	}
+
+	jsonPath := path + "/openapi.json"
+
+	app.GET(jsonPath, func(c *Ctx) error {
+		return c.Bytes(200, "application/json; charset=utf-8", openapiJSON)
+	})
+
+	html := meta.ScalarUIHTML(jsonPath)
+
+	app.GET(path, func(c *Ctx) error {
+		return c.Html(200, html)
+	})
+
+	app.GET(path+"/", func(c *Ctx) error {
+		return c.Html(200, html)
+	})
+}
+
+// ScalarAutoServe is a convenience method that generates the OpenAPI spec and serves Scalar UI.
+// Usage: app.ScalarAutoServe("/docs")
+func (app *App) ScalarAutoServe(path string) {
+	spec := meta.GenerateOpenAPI()
+
+	if len(path) > 0 && path[len(path)-1] == '/' {
+		path = path[:len(path)-1]
+	}
+
+	jsonPath := path + "/openapi.json"
+
+	app.GET(jsonPath, func(c *Ctx) error {
+		return c.Bytes(200, "application/json; charset=utf-8", spec)
+	})
+
+	html := meta.ScalarUIHTML(jsonPath)
+
+	app.GET(path, func(c *Ctx) error {
+		return c.Html(200, html)
+	})
+
+	app.GET(path+"/", func(c *Ctx) error {
+		return c.Html(200, html)
+	})
+}

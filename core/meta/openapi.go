@@ -8,12 +8,20 @@ import (
 	"strings"
 )
 
-//go:embed ui.html
+//go:embed swagger.html
 var SwaggerUITemplate string
+
+//go:embed scalar.html
+var ScalarUITemplate string
 
 // SwaggerUIHTML returns the Swagger UI HTML page pointing to the given openapi.json URL.
 func SwaggerUIHTML(jsonURL string) string {
 	return fmt.Sprintf(SwaggerUITemplate, jsonURL)
+}
+
+// ScalarUIHTML returns the Scalar API Reference HTML page pointing to the given openapi.json URL.
+func ScalarUIHTML(jsonURL string) string {
+	return fmt.Sprintf(ScalarUITemplate, jsonURL)
 }
 
 // GenerateOpenAPI generates an OpenAPI 3.0 JSON specification from all registered route metadata.
