@@ -3,6 +3,8 @@ package meta
 import (
 	"reflect"
 	"sync"
+
+	"github.com/wdvn/weed/core/ds/radix"
 )
 
 // RouteMeta holds metadata for a registered route, useful for generating OpenAPI documentation.
@@ -15,11 +17,28 @@ type RouteMeta struct {
 }
 
 var (
-	mu     sync.RWMutex
-	routes []RouteMeta
+	mu    sync.RWMutex
+	roots map[string]*radix.Tree[RouteMeta] // keyed by HTTP method (GET, POST, etc.)
 )
 
-// Register adds or updates one or more RouteMeta entries in the global registry.
+func init() {
+	roots = make(map[string]*radix.Tree[RouteMeta])
+}
+
+// merge updates existing metadata with non-zero fields from the incoming entry.
+func merge(existing *RouteMeta, incoming RouteMeta) {
+	if incoming.ReqType != nil {
+		existing.ReqType = incoming.ReqType
+	}
+	if incoming.RespType != nil {
+		existing.RespType = incoming.RespType
+	}
+	if incoming.Tag != "" {
+		existing.Tag = incoming.Tag
+	}
+}
+
+// Register adds or updates one or more RouteMeta entries in the radix tree.
 // If a route with the same Method+Path already exists, its fields are merged
 // (non-zero fields in the new entry override the existing ones).
 // This allows Handle() to register basic metadata (method, path) first,
@@ -27,47 +46,31 @@ var (
 func Register(metas ...RouteMeta) {
 	mu.Lock()
 	defer mu.Unlock()
-	for _, m := range metas {
-		if idx := findRoute(m.Method, m.Path); idx >= 0 {
-			// Merge: only override with non-zero values
-			if m.ReqType != nil {
-				routes[idx].ReqType = m.ReqType
-			}
-			if m.RespType != nil {
-				routes[idx].RespType = m.RespType
-			}
-			if m.Tag != "" {
-				routes[idx].Tag = m.Tag
-			}
-		} else {
-			routes = append(routes, m)
+	for i := range metas {
+		m := &metas[i]
+		tree, ok := roots[m.Method]
+		if !ok {
+			tree = radix.New[RouteMeta]()
+			roots[m.Method] = tree
 		}
+		tree.Upsert(m.Path, *m, merge)
 	}
 }
 
-// All returns a copy of all registered route metadata.
+// All returns all registered route metadata by traversing the radix trees.
 func All() []RouteMeta {
 	mu.RLock()
 	defer mu.RUnlock()
-	out := make([]RouteMeta, len(routes))
-	copy(out, routes)
-	return out
+	var result []RouteMeta
+	for _, tree := range roots {
+		result = append(result, tree.Collect()...)
+	}
+	return result
 }
 
 // Reset clears all registered metadata. Useful for testing.
 func Reset() {
 	mu.Lock()
 	defer mu.Unlock()
-	routes = routes[:0]
-}
-
-// findRoute returns the index of the route with the given method and path, or -1 if not found.
-// Must be called with mu held.
-func findRoute(method, path string) int {
-	for i := range routes {
-		if routes[i].Method == method && routes[i].Path == path {
-			return i
-		}
-	}
-	return -1
+	roots = make(map[string]*radix.Tree[RouteMeta])
 }

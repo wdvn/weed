@@ -83,6 +83,10 @@ func (app *App) GenerateOpenAPI() []byte {
 	// Helper to convert go type to openapi type
 	var getOpenAPIType func(t reflect.Type) map[string]interface{}
 	getOpenAPIType = func(t reflect.Type) map[string]interface{} {
+		if t == nil {
+			// Arbitrary JSON — empty schema means any value in OpenAPI 3.0
+			return map[string]interface{}{}
+		}
 		if t.Kind() == reflect.Ptr {
 			return getOpenAPIType(t.Elem())
 		}
@@ -125,12 +129,19 @@ func (app *App) GenerateOpenAPI() []byte {
 		}
 	}
 
+	// Helper to check if a path is a static file route (contains * catch-all param)
+	isStaticRoute := func(path string) bool {
+		return strings.Contains(path, "*")
+	}
+
 	for _, m := range meta.All() {
-		// Clean path for OpenAPI (e.g. /users/:id -> /users/{id})
+		// Clean path for OpenAPI (e.g. /users/:id -> /users/{id}, /static/*filepath -> /static/{filepath})
 		openApiPath := m.Path
 		parts := strings.Split(openApiPath, "/")
 		for i, p := range parts {
 			if strings.HasPrefix(p, ":") {
+				parts[i] = "{" + p[1:] + "}"
+			} else if strings.HasPrefix(p, "*") {
 				parts[i] = "{" + p[1:] + "}"
 			}
 		}
@@ -143,17 +154,65 @@ func (app *App) GenerateOpenAPI() []byte {
 		pathItem := paths[openApiPath].(map[string]interface{})
 		methodLower := strings.ToLower(m.Method)
 
-		operation := map[string]interface{}{
-			"responses": map[string]interface{}{
-				"200": map[string]interface{}{
-					"description": "Successful response",
-					"content": map[string]interface{}{
-						"application/json": map[string]interface{}{
-							"schema": getOpenAPIType(m.RespType),
+		var operation map[string]interface{}
+
+		if isStaticRoute(m.Path) {
+			// Static file route — binary file download response
+			operation = map[string]interface{}{
+				"summary": "Static file download",
+				"responses": map[string]interface{}{
+					"200": map[string]interface{}{
+						"description": "File download",
+						"content": map[string]interface{}{
+							"application/octet-stream": map[string]interface{}{
+								"schema": map[string]interface{}{
+									"type":   "string",
+									"format": "binary",
+								},
+							},
+						},
+					},
+					"404": map[string]interface{}{
+						"description": "File not found",
+					},
+				},
+				"parameters": []interface{}{
+					map[string]interface{}{
+						"name":     "filepath",
+						"in":       "path",
+						"required": true,
+						"schema":   map[string]interface{}{"type": "string"},
+					},
+				},
+			}
+		} else if m.RespType != nil {
+			// Contract route — full typed schema
+			operation = map[string]interface{}{
+				"responses": map[string]interface{}{
+					"200": map[string]interface{}{
+						"description": "Successful response",
+						"content": map[string]interface{}{
+							"application/json": map[string]interface{}{
+								"schema": getOpenAPIType(m.RespType),
+							},
 						},
 					},
 				},
-			},
+			}
+		} else {
+			// Plain handler route — arbitrary JSON response
+			operation = map[string]interface{}{
+				"responses": map[string]interface{}{
+					"200": map[string]interface{}{
+						"description": "Successful response",
+						"content": map[string]interface{}{
+							"application/json": map[string]interface{}{
+								"schema": map[string]interface{}{},
+							},
+						},
+					},
+				},
+			}
 		}
 
 		// Parse Request struct to generate parameters and requestBody
@@ -210,7 +269,12 @@ func (app *App) GenerateOpenAPI() []byte {
 		}
 
 		if len(parameters) > 0 {
-			operation["parameters"] = parameters
+			// Merge with existing parameters (e.g. static route already has filepath param)
+			if existing, ok := operation["parameters"]; ok {
+				operation["parameters"] = append(existing.([]interface{}), parameters...)
+			} else {
+				operation["parameters"] = parameters
+			}
 		}
 
 		if (m.Method == "POST" || m.Method == "PUT" || m.Method == "PATCH") && len(bodyProps) > 0 {
@@ -225,6 +289,12 @@ func (app *App) GenerateOpenAPI() []byte {
 				},
 			}
 		}
+
+		// Add tag if available
+		if m.Tag != "" {
+			operation["tags"] = []string{m.Tag}
+		}
+
 		pathItem[methodLower] = operation
 	}
 
