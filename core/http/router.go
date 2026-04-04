@@ -2,6 +2,7 @@ package http
 
 import (
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -31,7 +32,7 @@ func (ps Params) Get(name string) string {
 // DO NOT pass `ctx` to another Goroutine. If needed, please copy it.
 type HandlerFunc func(ctx *Ctx) error
 
-func wrapHandler(handler HandlerFunc, middlewares []MiddlewareFunc) HandlerFunc {
+func wrapHandler(handler HandlerFunc, middlewares ...MiddlewareFunc) HandlerFunc {
 	for i := len(middlewares) - 1; i >= 0; i-- {
 		handler = middlewares[i](handler)
 	}
@@ -207,14 +208,16 @@ func splitPath(path string) []string {
 }
 
 // Handle registers a new request handler with the given path and method.
-func (g *RouterGroup) Handle(method string, path string, handler HandlerFunc) {
+func (g *RouterGroup) Handle(method string, path string, handler HandlerFunc, mw ...MiddlewareFunc) {
 	fullPath := g.prefix + path
 	parts := splitPath(fullPath)
 	if _, ok := g.router.roots[method]; !ok {
 		g.router.roots[method] = &node{}
 	}
 	// Wrap the handler with all registered middlewares for this group
-	wrappedHandler := wrapHandler(handler, g.middlewares)
+	combineMW := slices.Clone(g.middlewares)
+	combineMW = append(combineMW, mw...)
+	wrappedHandler := wrapHandler(handler, combineMW...)
 	g.router.roots[method].insert(fullPath, parts, 0, wrappedHandler)
 }
 
@@ -268,23 +271,23 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 //--------------METHOD----------------
 
 // GET is a shortcut for Handle(http.MethodGet, path, handler)
-func (g *RouterGroup) GET(path string, handler HandlerFunc) {
-	g.Handle(http.MethodGet, path, handler)
+func (g *RouterGroup) GET(path string, handler HandlerFunc, middlewares ...MiddlewareFunc) {
+	g.Handle(http.MethodGet, path, handler, middlewares...)
 }
 
 // POST is a shortcut for Handle(http.MethodPost, path, handler)
-func (g *RouterGroup) POST(path string, handler HandlerFunc) {
-	g.Handle(http.MethodPost, path, handler)
+func (g *RouterGroup) POST(path string, handler HandlerFunc, middlewares ...MiddlewareFunc) {
+	g.Handle(http.MethodPost, path, handler, middlewares...)
 }
 
 // PUT is a shortcut for Handle(http.MethodPut, path, handler)
-func (g *RouterGroup) PUT(path string, handler HandlerFunc) {
-	g.Handle(http.MethodPut, path, handler)
+func (g *RouterGroup) PUT(path string, handler HandlerFunc, middlewares ...MiddlewareFunc) {
+	g.Handle(http.MethodPut, path, handler, middlewares...)
 }
 
 // DELETE is a shortcut for Handle(http.MethodDelete, path, handler)
-func (g *RouterGroup) DELETE(path string, handler HandlerFunc) {
-	g.Handle(http.MethodDelete, path, handler)
+func (g *RouterGroup) DELETE(path string, handler HandlerFunc, middlewares ...MiddlewareFunc) {
+	g.Handle(http.MethodDelete, path, handler, middlewares...)
 }
 
 func (g *RouterGroup) Static(prefix string, root string) {
