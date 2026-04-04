@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+
+	"github.com/wdvn/weed/core/meta"
 )
 
 const swaggerUITemplate = `<!DOCTYPE html>
@@ -123,9 +125,9 @@ func (app *App) GenerateOpenAPI() []byte {
 		}
 	}
 
-	for _, meta := range app.routesMeta {
+	for _, m := range meta.All() {
 		// Clean path for OpenAPI (e.g. /users/:id -> /users/{id})
-		openApiPath := meta.Path
+		openApiPath := m.Path
 		parts := strings.Split(openApiPath, "/")
 		for i, p := range parts {
 			if strings.HasPrefix(p, ":") {
@@ -139,7 +141,7 @@ func (app *App) GenerateOpenAPI() []byte {
 		}
 
 		pathItem := paths[openApiPath].(map[string]interface{})
-		methodLower := strings.ToLower(meta.Method)
+		methodLower := strings.ToLower(m.Method)
 
 		operation := map[string]interface{}{
 			"responses": map[string]interface{}{
@@ -147,7 +149,7 @@ func (app *App) GenerateOpenAPI() []byte {
 					"description": "Successful response",
 					"content": map[string]interface{}{
 						"application/json": map[string]interface{}{
-							"schema": getOpenAPIType(meta.RespType),
+							"schema": getOpenAPIType(m.RespType),
 						},
 					},
 				},
@@ -158,11 +160,11 @@ func (app *App) GenerateOpenAPI() []byte {
 		var parameters []interface{}
 		var bodyProps map[string]interface{}
 
-		if meta.ReqType != nil && meta.ReqType.Kind() == reflect.Struct {
+		if m.ReqType != nil && m.ReqType.Kind() == reflect.Struct {
 			bodyProps = make(map[string]interface{})
 
-			for i := 0; i < meta.ReqType.NumField(); i++ {
-				field := meta.ReqType.Field(i)
+			for i := 0; i < m.ReqType.NumField(); i++ {
+				field := m.ReqType.Field(i)
 
 				// Handle Path parameters
 				if pathTag := field.Tag.Get("path"); pathTag != "" {
@@ -211,7 +213,7 @@ func (app *App) GenerateOpenAPI() []byte {
 			operation["parameters"] = parameters
 		}
 
-		if (meta.Method == "POST" || meta.Method == "PUT" || meta.Method == "PATCH") && len(bodyProps) > 0 {
+		if (m.Method == "POST" || m.Method == "PUT" || m.Method == "PATCH") && len(bodyProps) > 0 {
 			operation["requestBody"] = map[string]interface{}{
 				"content": map[string]interface{}{
 					"application/json": map[string]interface{}{

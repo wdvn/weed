@@ -6,6 +6,7 @@ import (
 
 	"github.com/wdvn/weed/core/driven/rest"
 	"github.com/wdvn/weed/core/http"
+	"github.com/wdvn/weed/core/meta"
 )
 
 // Ctx is an alias for http.Ctx so external projects can use weed.Ctx
@@ -33,17 +34,15 @@ type HTTPError = http.HTTPError
 var NewHTTPError = http.NewHTTPError
 
 type App struct {
-	router     *http.Router
-	sv         std.Server
-	routesMeta []rest.RouteMeta
+	router *http.Router
+	sv     std.Server
 }
 
 func New() *App {
 	r := http.NewRouter()
 	return &App{
-		router:     r,
-		sv:         std.Server{Handler: r},
-		routesMeta: make([]rest.RouteMeta, 0),
+		router: r,
+		sv:     std.Server{Handler: r},
 	}
 }
 
@@ -91,11 +90,17 @@ func (app *App) SetRenderer(r Renderer) {
 	app.router.SetRenderer(r)
 }
 
+// RoutesMeta returns all registered route metadata from the global registry.
+func (app *App) RoutesMeta() []meta.RouteMeta {
+	return meta.All()
+}
+
 func (app *App) AddService(name string, sv any) error {
-	metas, err := rest.Mount(app.router.RouterGroup, name, sv)
-	if err != nil {
-		return err
-	}
-	app.routesMeta = append(app.routesMeta, metas...)
-	return nil
+	_, err := rest.Mount(app.router.RouterGroup, name, sv)
+	return err
+}
+
+func (app *App) AddServiceToGroup(group *RouterGroup, name string, sv any) error {
+	_, err := rest.Mount(group, name, sv)
+	return err
 }

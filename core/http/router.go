@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 	"sync"
+
+	"github.com/wdvn/weed/core/meta"
 )
 
 // Param represents a URL parameter (e.g., :id).
@@ -144,6 +146,11 @@ type RouterGroup struct {
 	router      *Router
 }
 
+// Prefix returns the full accumulated prefix of this group.
+func (g *RouterGroup) Prefix() string {
+	return g.prefix
+}
+
 // Group creates a new RouterGroup with the given prefix and middlewares.
 func (g *RouterGroup) Group(prefix string, middlewares ...MiddlewareFunc) *RouterGroup {
 	newMiddlewares := make([]MiddlewareFunc, 0, len(g.middlewares)+len(middlewares))
@@ -219,6 +226,12 @@ func (g *RouterGroup) Handle(method string, path string, handler HandlerFunc, mw
 	combineMW = append(combineMW, mw...)
 	wrappedHandler := wrapHandler(handler, combineMW...)
 	g.router.roots[method].insert(fullPath, parts, 0, wrappedHandler)
+
+	// Register basic route metadata so all routes are visible for OpenAPI generation
+	meta.Register(meta.RouteMeta{
+		Method: method,
+		Path:   fullPath,
+	})
 }
 
 // SetRenderer sets the template renderer used for all Ctx.Render() calls.

@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	weedhttp "github.com/wdvn/weed/core/http"
+	"github.com/wdvn/weed/core/meta"
 )
 
 // ContractError allows handlers to return specific HTTP status codes and messages.
@@ -126,13 +127,14 @@ func Mount(router *weedhttp.RouterGroup, name string, service any) ([]RouteMeta,
 
 		metas = append(metas, RouteMeta{
 			Method:   httpMethod,
-			Path:     fmt.Sprintf("/%s%s", name, httpPath),
+			Path:     group.Prefix() + httpPath,
 			ReqType:  reqType.Elem(),
 			RespType: mType.Out(0).Elem(), // Pointer to response
 			Tag:      name,
 		})
 	}
 
+	meta.Register(metas...)
 	return metas, nil
 }
 

@@ -1,12 +1,6 @@
 package rest
 
-import "reflect"
+import "github.com/wdvn/weed/core/meta"
 
-// RouteMeta holds metadata for a registered route, useful for generating OpenAPI documentation.
-type RouteMeta struct {
-	Method   string
-	Path     string
-	ReqType  reflect.Type
-	RespType reflect.Type
-	Tag      string //using for service name => open api tag
-}
+// RouteMeta is an alias for meta.RouteMeta for backward compatibility.
+type RouteMeta = meta.RouteMeta
