@@ -51,8 +51,8 @@ func (app *App) Serve(port string) error {
 	return app.sv.ListenAndServe()
 }
 
-func (app *App) Use(middle MiddlewareFunc) {
-	app.router.Use(middle)
+func (app *App) Use(middles ...http.MiddlewareFunc) {
+	app.router.Use(middles...)
 }
 
 // GET is a shortcut for router.GET

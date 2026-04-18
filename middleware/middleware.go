@@ -4,7 +4,6 @@
 package middleware
 
 import (
-	"fmt"
 	"log"
 	"net/http"
 	"runtime/debug"
@@ -77,37 +76,36 @@ const csrfTokenLen = 32
 //  2. On unsafe methods — validates the X-CSRF-Token header or _csrf form field against the cookie.
 //
 // It mirrors the essential behaviour of echo/middleware.CSRF() for ocypode's use-case.
-func CSRF() whttp.MiddlewareFunc {
-	return func(next whttp.HandlerFunc) whttp.HandlerFunc {
-		return func(c *whttp.Ctx) error {
-			req := c.Request()
-			method := req.Method
-
-			// Safe methods — skip validation, just ensure the cookie exists
-			safe := method == http.MethodGet || method == http.MethodHead ||
-				method == http.MethodOptions || method == http.MethodTrace
-			if safe {
-				return next(c)
-			}
-
-			// Unsafe methods — validate token
-			cookie, err := req.Cookie("_csrf")
-			if err != nil || cookie.Value == "" {
-				return whttp.NewHTTPError(http.StatusForbidden, "missing CSRF token")
-			}
-			expected := cookie.Value
-
-			// Check X-CSRF-Token header first, then _csrf form field
-			token := req.Header.Get("X-CSRF-Token")
-			if token == "" {
-				token = req.FormValue("_csrf")
-			}
-
-			if token != expected {
-				return whttp.NewHTTPError(http.StatusForbidden,
-					fmt.Sprintf("invalid CSRF token"))
-			}
-			return next(c)
-		}
-	}
-}
+//func CSRF() whttp.MiddlewareFunc {
+//	return func(next whttp.HandlerFunc) whttp.HandlerFunc {
+//		return func(c *whttp.Ctx) error {
+//			req := c.Request()
+//			method := req.Method
+//
+//			// Safe methods — skip validation, just ensure the cookie exists
+//			safe := method == http.MethodGet || method == http.MethodHead ||
+//				method == http.MethodOptions || method == http.MethodTrace
+//			if safe {
+//				return next(c)
+//			}
+//
+//			// Unsafe methods — validate token
+//			cookie, err := req.Cookie("_csrf")
+//			if err != nil || cookie.Value == "" {
+//				return fmt.Errorf("missing CSRF token")
+//			}
+//			expected := cookie.Value
+//
+//			// Check X-CSRF-Token header first, then _csrf form field
+//			token := req.Header.Get("X-CSRF-Token")
+//			if token == "" {
+//				token = req.FormValue("_csrf")
+//			}
+//
+//			if token != expected {
+//				return fmt.Errorf("invalid CSRF token")
+//			}
+//			return next(c)
+//		}
+//	}
+//}
