@@ -56,18 +56,18 @@ func (app *App) Use(middles ...http.MiddlewareFunc) {
 }
 
 // GET is a shortcut for router.GET
-func (app *App) GET(path string, handler HandlerFunc) {
-	app.router.GET(path, handler)
+func (app *App) GET(path string, handler HandlerFunc, middles ...http.MiddlewareFunc) {
+	app.router.GET(path, handler, middles...)
 }
 
 // POST is a shortcut for router.POST
-func (app *App) POST(path string, handler HandlerFunc) {
-	app.router.POST(path, handler)
+func (app *App) POST(path string, handler HandlerFunc, middles ...http.MiddlewareFunc) {
+	app.router.POST(path, handler, middles...)
 }
 
 // PUT is a shortcut for router.PUT
-func (app *App) PUT(path string, handler HandlerFunc) {
-	app.router.PUT(path, handler)
+func (app *App) PUT(path string, handler HandlerFunc, middles ...http.MiddlewareFunc) {
+	app.router.PUT(path, handler, middles...)
 }
 
 // DELETE is a shortcut for router.DELETE
