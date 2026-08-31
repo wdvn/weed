@@ -51,6 +51,12 @@ func (app *App) Serve(port string) error {
 	return app.sv.ListenAndServe()
 }
 
+// ServeHTTP makes the App implement the http.Handler interface,
+// so it can be used with httptest or mounted inside another server.
+func (app *App) ServeHTTP(w std.ResponseWriter, req *std.Request) {
+	app.router.ServeHTTP(w, req)
+}
+
 func (app *App) Use(middles ...http.MiddlewareFunc) {
 	app.router.Use(middles...)
 }
